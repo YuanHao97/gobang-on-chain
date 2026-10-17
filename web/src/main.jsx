@@ -120,7 +120,7 @@ function App() {
     && fastSession.expiresAt > Math.floor(Date.now() / 1000));
 
   useEffect(() => {
-    fetch("/contracts.json", { cache: "no-store" })
+    fetch(`${import.meta.env.BASE_URL}contracts.json`, { cache: "no-store" })
       .then((response) => response.json())
       .then(setConfig)
       .catch(() => setNotice("Unable to load deployment configuration."));
