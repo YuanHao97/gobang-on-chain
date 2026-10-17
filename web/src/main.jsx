@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserProvider, Contract, getBytes, solidityPackedKeccak256, Wallet } from "ethers";
 import { chessPieceAbi, gameManagerAbi } from "./contracts";
+import { buildVictoryLeaderboard } from "./leaderboard";
 import { BLACK_FALLBACK_SKIN, PALETTES, skinFromMetadataURI, WHITE_FALLBACK_SKIN } from "./pieceSkin";
 import "./styles.css";
 
@@ -106,6 +107,7 @@ function App() {
     () => provider && contractsReady ? new Contract(config.chessPieceNFT, chessPieceAbi, provider) : null,
     [provider, config, contractsReady]
   );
+  const leaderboard = useMemo(() => buildVictoryLeaderboard(matches), [matches]);
   const activeMatch = matches.find((match) => match.id === selectedMatch);
   const canJoinActiveMatch = activeMatch?.status === 0
     && activeMatch.creator.toLowerCase() !== account.toLowerCase();
@@ -510,6 +512,18 @@ function App() {
         <label>Turn length (minutes)<input type="number" min="1" max="10080" value={turnMinutes} onChange={(event) => setTurnMinutes(event.target.value)} /></label>
         <div className="actions"><button className="secondary" onClick={createMatch} disabled={!account || pending}>Create multiplayer match</button>{localServicesEnabled && <button onClick={createComputerMatch} disabled={!account || pending}>Play local computer</button>}</div>
       </article>
+    </section>
+
+    <section className="leaderboard">
+      <div className="section-title"><div><p className="eyebrow">ON-CHAIN RECORDS</p><h2>Victory leaderboard</h2></div></div>
+      <p className="field-help">Top three wallet addresses ranked by wins across finished matches on the connected network.</p>
+      {leaderboard.length === 0 ? <p className="leaderboard-empty">No winners yet. Finish a match to enter the leaderboard.</p> : <ol className="leaderboard-list">{leaderboard.map((entry, index) => <li className="leaderboard-entry" key={entry.address}>
+        <span className="leaderboard-rank">#{index + 1}</span>
+        {Number(config?.chainId) === 11155111
+          ? <a className="leaderboard-address" href={`https://sepolia.etherscan.io/address/${entry.address}`} target="_blank" rel="noreferrer">{entry.address}</a>
+          : <code className="leaderboard-address">{entry.address}</code>}
+        <strong className="leaderboard-wins">{entry.wins} {entry.wins === 1 ? "win" : "wins"}</strong>
+      </li>)}</ol>}
     </section>
 
     <section className="matches"><div className="section-title"><h2>Match lobby</h2><button className="secondary" onClick={refresh} disabled={!account || pending}>Refresh</button></div>

@@ -16,6 +16,7 @@ The live demo uses Ethereum Sepolia test ETH only. Do not send mainnet ETH to th
 - Play standard freestyle Gobang on a 15x15 board.
 - See each player's NFT skin rendered on every move.
 - Watch an active opponent's moves appear through automatic three-second refreshes.
+- View the top three winning wallet addresses in an on-chain victory leaderboard.
 - Resign a match or settle an expired turn on-chain.
 - Open any completed match to inspect its final board snapshot and finish reason.
 - Run a local single-player match against a Hardhat computer account during development.
