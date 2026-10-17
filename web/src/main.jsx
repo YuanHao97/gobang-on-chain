@@ -489,9 +489,10 @@ function App() {
 
   return <main>
     <header>
-      <div><p className="eyebrow">LOCAL EVM GAME</p><h1>Gobang On-Chain</h1></div>
+      <div><p className="eyebrow">ETHEREUM SEPOLIA TESTNET</p><h1>Gobang On-Chain</h1></div>
       <button onClick={connectWallet} disabled={pending}>{account ? shortAddress(account) : "Connect wallet"}</button>
     </header>
+    <p className="network-note"><strong>Transactions use Ethereum Sepolia.</strong> Minting pieces, creating or joining matches, and playing moves require Sepolia test ETH. Do not send mainnet ETH to this game.</p>
     <p className="notice">{notice}</p>
     {!contractsReady && <p className="warning">Contracts are not deployed for this network. Deploy contracts, then update this client configuration.</p>}
 
