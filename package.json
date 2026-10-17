@@ -1,0 +1,25 @@
+{
+  "name": "gobang-on-chain",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "clean": "hardhat clean",
+    "node": "hardhat node",
+    "deploy:local": "hardhat run scripts/deploy.js --network localhost",
+    "deploy:sepolia": "hardhat run scripts/deploy.js --network sepolia",
+    "use:sepolia": "node scripts/useDeployment.js sepolia",
+    "bot:local": "node scripts/localComputer.js",
+    "smoke:bot": "node scripts/smokeLocalComputer.js",
+    "web": "npm --prefix web run dev"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "hardhat": "^2.29.1"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "5.0.2",
+    "dotenv": "^16.6.1"
+  }
+}
