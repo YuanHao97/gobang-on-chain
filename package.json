@@ -12,6 +12,9 @@
     "use:sepolia": "node scripts/useDeployment.js sepolia",
     "bot:local": "node scripts/localComputer.js",
     "smoke:bot": "node scripts/smokeLocalComputer.js",
+    "ai:install": "npm --prefix agent-service install",
+    "ai:server": "npm --prefix agent-service start",
+    "ai:test": "npm --prefix agent-service test",
     "web": "npm --prefix web run dev"
   },
   "devDependencies": {

@@ -8,6 +8,10 @@ import "./styles.css";
 
 const EMPTY_ADDRESS = "0x0000000000000000000000000000000000000000";
 const LOCAL_COMPUTER_URL = "http://127.0.0.1:8787";
+const LOCAL_AI_RECOMMENDER_URL = ["127.0.0.1", "localhost"].includes(window.location.hostname)
+  ? "http://127.0.0.1:8790"
+  : "";
+const AI_RECOMMENDER_URL = (import.meta.env.VITE_AI_RECOMMENDER_URL || LOCAL_AI_RECOMMENDER_URL).replace(/\/$/, "");
 const FAST_SESSION_SECONDS = 2 * 60 * 60;
 const STYLES = ["Aurora", "Comet", "Ember", "Frost", "Nebula", "Orbit"];
 const NOUNS = ["Stone", "Crown", "Echo", "Rune", "Spark", "Wave"];
@@ -44,6 +48,10 @@ function createMetadataURI(name, design) {
 
 function shortAddress(address) {
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
+}
+
+function boardCoordinate(x, y) {
+  return `${String.fromCharCode(65 + x)}${y + 1}`;
 }
 
 function finishReasonLabel(reason) {
@@ -97,6 +105,8 @@ function App() {
   const [turnMinutes, setTurnMinutes] = useState(10);
   const [notice, setNotice] = useState("Deploy contracts, then connect a wallet.");
   const [pending, setPending] = useState(false);
+  const [aiPending, setAiPending] = useState(false);
+  const [aiRecommendation, setAiRecommendation] = useState(null);
 
   const contractsReady = Boolean(config?.chessPieceNFT && config?.gameManager);
   const game = useMemo(
@@ -166,6 +176,10 @@ function App() {
     if (activeMatch && game) loadBoard(activeMatch);
     else setBoard([]);
   }, [activeMatch?.id, activeMatch?.moveCount, activeMatch?.status, game]);
+
+  useEffect(() => {
+    setAiRecommendation(null);
+  }, [activeMatch?.id, activeMatch?.moveCount, activeMatch?.status]);
 
   useEffect(() => {
     if (!activeMatch || activeMatch.status !== 1 || !account) return undefined;
@@ -335,7 +349,7 @@ function App() {
         body: JSON.stringify(body),
         signal: controller.signal
       });
-      const payload = await response.json();
+      const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || "The local computer did not respond.");
       await refresh();
       return payload;
@@ -473,6 +487,47 @@ function App() {
     return send((signer) => game.connect(signer).expireMatch(activeMatch.id), "Expired match settled.");
   }
 
+  async function requestAiRecommendation() {
+    if (!AI_RECOMMENDER_URL) {
+      setNotice("The AgentKit recommendation service is not configured for this deployment.");
+      return;
+    }
+    if (!activeMatch || !canPlay || board.length !== activeMatch.boardSize * activeMatch.boardSize) {
+      setNotice("AI move advice is available when the on-chain board is loaded and it is your turn.");
+      return;
+    }
+
+    const playerStone = activeMatch.currentPlayer.toLowerCase() === activeMatch.creator.toLowerCase() ? 1 : 2;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 20_000);
+    try {
+      setAiPending(true);
+      setAiRecommendation(null);
+      setNotice("AgentKit is analyzing the current board…");
+      const response = await fetch(`${AI_RECOMMENDER_URL}/recommend`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ board, boardSize: activeMatch.boardSize, playerStone }),
+        signal: controller.signal
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "The AI recommender did not respond.");
+
+      const index = Number(payload.y) * activeMatch.boardSize + Number(payload.x);
+      if (!Number.isInteger(index) || index < 0 || index >= board.length || board[index] !== 0) {
+        throw new Error("The AI recommender returned an invalid move.");
+      }
+      setAiRecommendation(payload);
+      setNotice(`AgentKit recommends ${boardCoordinate(payload.x, payload.y)}. Review the suggestion before playing.`);
+    } catch (error) {
+      const message = error?.name === "AbortError" ? "The recommendation service timed out." : displayError(error);
+      setNotice(`AI recommendation failed: ${message}`);
+    } finally {
+      window.clearTimeout(timeout);
+      setAiPending(false);
+    }
+  }
+
   function selectMatch(matchId) {
     setBoard([]);
     setSelectedMatch(matchId);
@@ -482,7 +537,10 @@ function App() {
     if (!activeMatch || board.length !== activeMatch.boardSize * activeMatch.boardSize) {
       return <p className="field-help">Loading the on-chain board…</p>;
     }
-    return <div className={`board ${readOnly ? "board-snapshot" : ""}`} style={{ gridTemplateColumns: `repeat(${activeMatch.boardSize}, 1fr)` }}>{board.map((stone, index) => <button aria-label={`Cell ${index}`} className={`cell stone-${stone}`} disabled={readOnly || !canPlay || stone !== 0 || pending || isTurnExpired} key={index} onClick={readOnly ? undefined : () => playMove(index)}><span style={stone === 0 ? undefined : { "--stone-primary": skinForStone(stone).primary, "--stone-secondary": skinForStone(stone).secondary }} /></button>)}</div>;
+    const suggestedIndex = aiRecommendation
+      ? Number(aiRecommendation.y) * activeMatch.boardSize + Number(aiRecommendation.x)
+      : -1;
+    return <div className={`board ${readOnly ? "board-snapshot" : ""}`} style={{ gridTemplateColumns: `repeat(${activeMatch.boardSize}, 1fr)` }}>{board.map((stone, index) => <button aria-label={`Cell ${index}`} className={`cell stone-${stone} ${!readOnly && index === suggestedIndex ? "recommended" : ""}`} disabled={readOnly || !canPlay || stone !== 0 || pending || aiPending || isTurnExpired} key={index} onClick={readOnly ? undefined : () => playMove(index)}><span style={stone === 0 ? undefined : { "--stone-primary": skinForStone(stone).primary, "--stone-secondary": skinForStone(stone).secondary }} /></button>)}</div>;
   }
 
   const statusLabel = (match) => ["Open", "Active", "Finished"][match.status] || "Unknown";
@@ -536,7 +594,7 @@ function App() {
 
     {activeMatch && <section className="game"><div className="section-title"><div><p className="eyebrow">MATCH #{activeMatch.id}</p><h2>{statusLabel(activeMatch)}</h2></div>{canJoinActiveMatch && <button onClick={() => joinMatch(activeMatch.id)} disabled={!selectedPiece || pending}>Join with selected piece</button>}{activeMatch.status === 1 && <button className="secondary" onClick={resign} disabled={pending}>Resign</button>}{isTurnExpired && <button className="secondary" onClick={settleExpiredMatch} disabled={pending}>Settle expired match</button>}</div>
       {activeMatch.status === 0 && <p>This match is waiting for a second wallet to join. The creator will play black and make the first move after joining.</p>}
-      {activeMatch.status === 1 && <><p>{isTurnExpired ? "This turn has expired. Settle the match to award the win to the other player." : (isComputerMatch ? (canPlay ? "Your turn — you play black." : "Local computer is thinking…") : `${shortAddress(activeMatch.currentPlayer)} to move${canPlay ? " — your turn" : ""}. Live updates run every 3 seconds.`)}</p>{localServicesEnabled && isParticipant && <div className="fast-moves">{hasFastSession ? <span>⚡ Fast moves are enabled for this browser session.</span> : <button className="secondary" onClick={enableFastMoves} disabled={pending}>Retry fast moves</button>} {!hasFastSession && <small>Fast-move authorization opens automatically once per active match. One MetaMask signature enables no-popup moves for two hours.</small>}</div>}<div className="skin-legend"><span><i style={{ "--stone-primary": matchSkins.creator.primary, "--stone-secondary": matchSkins.creator.secondary }} />Black: {matchSkins.creator.style}</span><span><i style={{ "--stone-primary": matchSkins.joiner.primary, "--stone-secondary": matchSkins.joiner.secondary }} />White: {matchSkins.joiner.style}</span></div>{renderMatchBoard()}</>}
+      {activeMatch.status === 1 && <><p>{isTurnExpired ? "This turn has expired. Settle the match to award the win to the other player." : (isComputerMatch ? (canPlay ? "Your turn — you play black." : "Local computer is thinking…") : `${shortAddress(activeMatch.currentPlayer)} to move${canPlay ? " — your turn" : ""}. Live updates run every 3 seconds.`)}</p>{localServicesEnabled && isParticipant && <div className="fast-moves">{hasFastSession ? <span>⚡ Fast moves are enabled for this browser session.</span> : <button className="secondary" onClick={enableFastMoves} disabled={pending}>Retry fast moves</button>} {!hasFastSession && <small>Fast-move authorization opens automatically once per active match. One MetaMask signature enables no-popup moves for two hours.</small>}</div>}{isParticipant && <div className="ai-advisor"><div><p className="eyebrow">COINBASE AGENTKIT</p><strong>AI move advisor</strong></div><button className="secondary" onClick={requestAiRecommendation} disabled={!canPlay || aiPending || pending || isTurnExpired || !AI_RECOMMENDER_URL}>{aiPending ? "Analyzing…" : "Recommend a move"}</button>{aiRecommendation ? <p><b>{boardCoordinate(aiRecommendation.x, aiRecommendation.y)}</b> — {aiRecommendation.reason} <small>{Math.round(Number(aiRecommendation.confidence) * 100)}% confidence</small></p> : <small>{AI_RECOMMENDER_URL ? (canPlay ? "Suggestions highlight a legal empty intersection but never play it automatically." : "A recommendation is available on your turn.") : "Configure VITE_AI_RECOMMENDER_URL to enable recommendations."}</small>}</div>}<div className="skin-legend"><span><i style={{ "--stone-primary": matchSkins.creator.primary, "--stone-secondary": matchSkins.creator.secondary }} />Black: {matchSkins.creator.style}</span><span><i style={{ "--stone-primary": matchSkins.joiner.primary, "--stone-secondary": matchSkins.joiner.secondary }} />White: {matchSkins.joiner.style}</span></div>{renderMatchBoard()}</>}
       {activeMatch.status === 2 && <><p>{activeMatch.winner !== EMPTY_ADDRESS ? `${shortAddress(activeMatch.winner)} won.` : "This match ended without a winner."} Finish reason: {finishReasonLabel(activeMatch.reason)}.</p><p className="snapshot-title">Final board snapshot</p><div className="skin-legend"><span><i style={{ "--stone-primary": matchSkins.creator.primary, "--stone-secondary": matchSkins.creator.secondary }} />Black: {matchSkins.creator.style}</span><span><i style={{ "--stone-primary": matchSkins.joiner.primary, "--stone-secondary": matchSkins.joiner.secondary }} />White: {matchSkins.joiner.style}</span></div>{renderMatchBoard(true)}</>}
     </section>}
   </main>;

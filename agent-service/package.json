@@ -1,0 +1,20 @@
+{
+  "name": "gobang-agentkit-recommender",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "dev": "node --watch src/server.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "@coinbase/agentkit": "^0.10.4",
+    "dotenv": "^18.0.8",
+    "openai": "^7.38.0",
+    "zod": "^4.6.7"
+  }
+}

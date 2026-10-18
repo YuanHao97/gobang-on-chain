@@ -17,6 +17,7 @@ The live demo uses Ethereum Sepolia test ETH only. Do not send mainnet ETH to th
 - See each player's NFT skin rendered on every move.
 - Watch an active opponent's moves appear through automatic three-second refreshes.
 - View the top three winning wallet addresses in an on-chain victory leaderboard.
+- Ask a Coinbase AgentKit-powered advisor to recommend a legal move without playing it automatically.
 - Resign a match or settle an expired turn on-chain.
 - Open any completed match to inspect its final board snapshot and finish reason.
 - Run a local single-player match against a Hardhat computer account during development.
@@ -38,6 +39,7 @@ Chess pieces are cosmetic identities. They do not change the rules or provide ga
 | `ChessPieceNFT` | ERC-721 ownership, immutable display names, and metadata URIs for player-created piece designs. |
 | `GameManager` | Match creation and joining, board state, turn order, deadlines, move validation, five-in-a-row detection, resignation, cancellation, and expiry. |
 | Web client | Wallet connection, in-browser metadata generation, piece rendering, lobby navigation, live board refresh, and completed-match snapshots. |
+| AgentKit service | Read-only move analysis through a custom AgentKit action, an OpenAI model, and server-side validation of every recommendation. |
 
 The contracts are the authoritative game engine. The client reads board cells and match data from the selected network instead of maintaining a separate off-chain result database.
 
@@ -67,6 +69,8 @@ Network: **Ethereum Sepolia**, chain ID `11155111`.
 - Hardhat development and tests
 - React and Vite web client
 - ethers.js wallet and contract integration
+- Coinbase AgentKit custom action for AI move advice
+- OpenAI Responses API with Structured Outputs
 
 ## Local Development
 
@@ -75,6 +79,8 @@ Network: **Ethereum Sepolia**, chain ID `11155111`.
 - Node.js 20 or later
 - npm 10 or later
 - MetaMask or another EVM wallet
+
+The optional AgentKit recommendation service requires Node.js 22 or later. It runs separately from the contracts and web client.
 
 Install dependencies, compile the contracts, and run the test suite:
 
@@ -132,6 +138,29 @@ Private key: 5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a
 
 If MetaMask reports a local nonce or RPC error after the node has restarted, open **Settings -> Advanced -> Clear activity tab data**, then reconnect to Hardhat Local. This clears wallet activity history without changing the local chain.
 
+## AI Move Recommendations
+
+The optional recommendation service accepts the current 15x15 board, builds a short list of legal tactical moves, and exposes that analysis as a custom Coinbase AgentKit action. An OpenAI model selects from those candidates using Structured Outputs, and the service verifies that the returned cell is both legal and empty before sending it to the browser. The recommendation is highlighted on the board, but the player must still click the cell and approve any required wallet transaction.
+
+Use Node.js 22 or later, then install and configure the isolated service:
+
+```bash
+npm run ai:install
+cp agent-service/.env.example agent-service/.env
+```
+
+Set `OPENAI_API_KEY` in `agent-service/.env`, then run:
+
+```bash
+npm run ai:server
+```
+
+The local web client automatically uses `http://127.0.0.1:8790`. The OpenAI API key stays in the server-side service and must never be placed in a `VITE_` variable or shipped to the browser.
+
+For a public deployment, host `agent-service` on an HTTPS-capable Node.js 22 service, set `AI_RECOMMENDER_HOST=0.0.0.0` and `AI_ALLOWED_ORIGINS=https://yuanhao97.github.io` there, and add the backend URL as a GitHub Actions repository variable named `VITE_AI_RECOMMENDER_URL`. The public AI button remains disabled until that backend URL is configured; the rest of the game continues to work normally.
+
+The recommendation provider is deliberately read-only: it uses no wallet private key, cannot send a transaction, and validates model output against the submitted board before returning it.
+
 ## Deploy to Ethereum Sepolia
 
 Use a new test-only wallet with Sepolia test ETH. Do not reuse a wallet that holds mainnet assets. Copy `.env.example` to `.env`, then set `SEPOLIA_RPC_URL` and the private key for the test wallet. The `.env` file is ignored by Git.
@@ -157,6 +186,7 @@ contracts/ChessPieceNFT.sol  Custom chess-piece NFT contract
 contracts/GameManager.sol    Authoritative Gobang rules contract
 deployments/                 Network-specific contract addresses
 scripts/                     Deployment, network, relay, and computer scripts
+agent-service/               Coinbase AgentKit move recommendation service
 test/GameManager.js          Contract behavior tests
 web/                         React and Vite web client
 docs/design.md               Product and technical design
