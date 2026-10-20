@@ -159,6 +159,8 @@ The local web client automatically uses `http://127.0.0.1:8790`. The DeepSeek AP
 
 For a public deployment, host `agent-service` on an HTTPS-capable Node.js 22 service, set `AI_RECOMMENDER_HOST=0.0.0.0` and `AI_ALLOWED_ORIGINS=https://yuanhao97.github.io` there, and add the backend URL as a GitHub Actions repository variable named `VITE_AI_RECOMMENDER_URL`. The public AI button remains disabled until that backend URL is configured; the rest of the game continues to work normally.
 
+For Vercel, import this repository, set the project root directory to `agent-service`, and add `DEEPSEEK_API_KEY`, `DEEPSEEK_MODEL=deepseek-flash`, and `AI_ALLOWED_ORIGINS=https://yuanhao97.github.io` as environment variables. The included Vercel Functions expose `/health` and `/recommend`; each push to the selected branch triggers a new deployment.
+
 The recommendation provider is deliberately read-only: it uses no wallet private key, cannot send a transaction, and validates model output against the submitted board before returning it.
 
 ## Deploy to Ethereum Sepolia
