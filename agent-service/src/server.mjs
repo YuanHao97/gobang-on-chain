@@ -76,7 +76,7 @@ export function createRecommendationServer({
       return sendJson(response, 200, recommendation, origin, allowedOrigins);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Recommendation failed.";
-      const status = message.includes("OpenAI") || message.includes("model") ? 502 : 400;
+      const status = message.includes("DeepSeek") || message.includes("model") ? 502 : 400;
       return sendJson(response, status, { error: message }, origin, allowedOrigins);
     }
   });

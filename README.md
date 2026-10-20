@@ -39,7 +39,7 @@ Chess pieces are cosmetic identities. They do not change the rules or provide ga
 | `ChessPieceNFT` | ERC-721 ownership, immutable display names, and metadata URIs for player-created piece designs. |
 | `GameManager` | Match creation and joining, board state, turn order, deadlines, move validation, five-in-a-row detection, resignation, cancellation, and expiry. |
 | Web client | Wallet connection, in-browser metadata generation, piece rendering, lobby navigation, live board refresh, and completed-match snapshots. |
-| AgentKit service | Read-only move analysis through a custom AgentKit action, an OpenAI model, and server-side validation of every recommendation. |
+| AgentKit service | Read-only move analysis through a custom AgentKit action, a DeepSeek model, and server-side validation of every recommendation. |
 
 The contracts are the authoritative game engine. The client reads board cells and match data from the selected network instead of maintaining a separate off-chain result database.
 
@@ -70,7 +70,7 @@ Network: **Ethereum Sepolia**, chain ID `11155111`.
 - React and Vite web client
 - ethers.js wallet and contract integration
 - Coinbase AgentKit custom action for AI move advice
-- OpenAI Responses API with Structured Outputs
+- DeepSeek Responses API with Structured Outputs
 
 ## Local Development
 
@@ -140,7 +140,7 @@ If MetaMask reports a local nonce or RPC error after the node has restarted, ope
 
 ## AI Move Recommendations
 
-The optional recommendation service accepts the current 15x15 board, builds a short list of legal tactical moves, and exposes that analysis as a custom Coinbase AgentKit action. An OpenAI model selects from those candidates using Structured Outputs, and the service verifies that the returned cell is both legal and empty before sending it to the browser. The recommendation is highlighted on the board, but the player must still click the cell and approve any required wallet transaction.
+The optional recommendation service accepts the current 15x15 board, builds a short list of legal tactical moves, and exposes that analysis as a custom Coinbase AgentKit action. A DeepSeek model selects from those candidates using Structured Outputs, and the service verifies that the returned cell is both legal and empty before sending it to the browser. The recommendation is highlighted on the board, but the player must still click the cell and approve any required wallet transaction.
 
 Use Node.js 22 or later, then install and configure the isolated service:
 
@@ -149,13 +149,13 @@ npm run ai:install
 cp agent-service/.env.example agent-service/.env
 ```
 
-Set `OPENAI_API_KEY` in `agent-service/.env`, then run:
+Create an API key in the DeepSeek platform, set `DEEPSEEK_API_KEY` in `agent-service/.env`, and optionally change `DEEPSEEK_MODEL` from the default `deepseek-flash`. Then run:
 
 ```bash
 npm run ai:server
 ```
 
-The local web client automatically uses `http://127.0.0.1:8790`. The OpenAI API key stays in the server-side service and must never be placed in a `VITE_` variable or shipped to the browser.
+The local web client automatically uses `http://127.0.0.1:8790`. The DeepSeek API key stays in the server-side service and must never be placed in a `VITE_` variable or shipped to the browser.
 
 For a public deployment, host `agent-service` on an HTTPS-capable Node.js 22 service, set `AI_RECOMMENDER_HOST=0.0.0.0` and `AI_ALLOWED_ORIGINS=https://yuanhao97.github.io` there, and add the backend URL as a GitHub Actions repository variable named `VITE_AI_RECOMMENDER_URL`. The public AI button remains disabled until that backend URL is configured; the rest of the game continues to work normally.
 

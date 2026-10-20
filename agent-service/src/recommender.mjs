@@ -86,39 +86,50 @@ function fallbackRecommendation(candidates, reason) {
 }
 
 export async function createGobangRecommender(options = {}) {
-  const model = options.model || process.env.OPENAI_MODEL || "gpt-4o-mini";
-  const apiKey = options.apiKey || process.env.OPENAI_API_KEY;
-  if (!options.openaiClient && !apiKey) throw new Error("OPENAI_API_KEY is required.");
+  const model = options.model ?? process.env.DEEPSEEK_MODEL ?? "deepseek-flash";
+  const apiKey = options.apiKey ?? process.env.DEEPSEEK_API_KEY;
+  if (!options.deepseekClient && !apiKey) throw new Error("DEEPSEEK_API_KEY is required.");
 
-  const openai = options.openaiClient || new OpenAI({ apiKey, maxRetries: 1, timeout: 20_000 });
+  const deepseek = options.deepseekClient || new OpenAI({
+    apiKey,
+    baseURL: "https://api.deepseek.com",
+    maxRetries: 1,
+    timeout: 20_000
+  });
   const actionProvider = new GobangRecommendationActionProvider(async (input) => {
       const request = validateRecommendationRequest(input);
       const candidates = rankCandidateMoves(request);
-      const response = await openai.responses.create({
-        model,
-        store: false,
-        instructions: [
-          "You are a concise Gobang move advisor.",
-          "Choose exactly one move from the supplied candidate list.",
-          "Prioritize an immediate win, then blocking an immediate loss, then creating or blocking strong lines.",
-          "Do not claim the move was played and do not provide hidden chain-of-thought.",
-          "Return only the requested structured recommendation."
-        ].join(" "),
-        input: JSON.stringify({
-          boardSize: request.boardSize,
-          playerStone: request.playerStone,
-          board: request.board,
-          candidates
-        }),
-        text: {
-          format: {
-            type: "json_schema",
-            name: "gobang_move_recommendation",
-            strict: true,
-            schema: RECOMMENDATION_JSON_SCHEMA
+      let response;
+      try {
+        response = await deepseek.responses.create({
+          model,
+          instructions: [
+            "You are a concise Gobang move advisor.",
+            "Choose exactly one move from the supplied candidate list.",
+            "Prioritize an immediate win, then blocking an immediate loss, then creating or blocking strong lines.",
+            "Do not claim the move was played and do not provide hidden chain-of-thought.",
+            "Return only the requested structured recommendation."
+          ].join(" "),
+          input: JSON.stringify({
+            boardSize: request.boardSize,
+            playerStone: request.playerStone,
+            board: request.board,
+            candidates
+          }),
+          reasoning: { effort: "none" },
+          max_output_tokens: 512,
+          text: {
+            format: {
+              type: "json_schema",
+              name: "gobang_move_recommendation",
+              schema: RECOMMENDATION_JSON_SCHEMA
+            }
           }
-        }
-      });
+        });
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : "Unknown provider error.";
+        throw new Error(`DeepSeek API request failed: ${detail}`);
+      }
 
       let recommendation;
       try {
@@ -134,7 +145,7 @@ export async function createGobangRecommender(options = {}) {
         recommendation = fallbackRecommendation(candidates, "The model suggestion was invalid, so the tactical fallback selected a legal move.");
       }
 
-      return JSON.stringify({ ...recommendation, model, source: "coinbase-agentkit" });
+      return JSON.stringify({ ...recommendation, model, source: "coinbase-agentkit-deepseek" });
   });
 
   const agentKit = await AgentKit.from({
