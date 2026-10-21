@@ -223,12 +223,30 @@ function App() {
     void enableFastMoves();
   }, [activeMatch?.id, activeMatch?.status, isParticipant, hasFastSession, game, provider, account, config?.gameManager, localServicesEnabled]);
 
+  useEffect(() => {
+    if (!window.ethereum?.on) return undefined;
+    const handleAccountsChanged = (accounts) => {
+      const nextAccount = accounts[0] || "";
+      setAccount(nextAccount);
+      setNotice(nextAccount ? `Wallet account switched to ${shortAddress(nextAccount)}.` : "Wallet disconnected.");
+    };
+    window.ethereum.on("accountsChanged", handleAccountsChanged);
+    return () => window.ethereum.removeListener?.("accountsChanged", handleAccountsChanged);
+  }, []);
+
   async function connectWallet() {
     try {
       if (!window.ethereum) throw new Error("Install MetaMask or another injected EVM wallet first.");
       if (!contractsReady) throw new Error("Contracts have not been deployed for the selected network.");
       const nextProvider = new BrowserProvider(window.ethereum);
+      // Requesting the eth_accounts permission makes MetaMask show its account selector,
+      // including when this site has already been connected before.
+      await window.ethereum.request({
+        method: "wallet_requestPermissions",
+        params: [{ eth_accounts: {} }]
+      });
       const accounts = await nextProvider.send("eth_requestAccounts", []);
+      if (!accounts[0]) throw new Error("Choose an account in MetaMask to continue.");
       const network = await nextProvider.getNetwork();
       if (Number(network.chainId) !== config.chainId) {
         throw new Error(`Switch your wallet to chain ID ${config.chainId}.`);
@@ -553,7 +571,7 @@ function App() {
   return <main>
     <header>
       <div><p className="eyebrow">ETHEREUM SEPOLIA TESTNET</p><h1>Gobang On-Chain</h1></div>
-      <button onClick={connectWallet} disabled={pending}>{account ? shortAddress(account) : "Connect wallet"}</button>
+      <button onClick={connectWallet} disabled={pending}>{account ? `Switch account (${shortAddress(account)})` : "Connect wallet"}</button>
     </header>
     <p className="network-note"><strong>Transactions use Ethereum Sepolia.</strong> Minting pieces, creating or joining matches, and playing moves require Sepolia test ETH. Do not send mainnet ETH to this game.</p>
     <p className="notice">{notice}</p>
