@@ -13,6 +13,7 @@ const LOCAL_AI_RECOMMENDER_URL = ["127.0.0.1", "localhost"].includes(window.loca
   ? "http://127.0.0.1:8790"
   : "";
 const AI_RECOMMENDER_URL = (import.meta.env.VITE_AI_RECOMMENDER_URL || LOCAL_AI_RECOMMENDER_URL).replace(/\/$/, "");
+const RELAY_SERVICE_URL = (import.meta.env.VITE_RELAY_URL || "").replace(/\/$/, "");
 const FAST_SESSION_SECONDS = 2 * 60 * 60;
 const STYLES = ["Aurora", "Comet", "Ember", "Frost", "Nebula", "Orbit"];
 const NOUNS = ["Stone", "Crown", "Echo", "Rune", "Spark", "Wave"];
@@ -108,6 +109,7 @@ function App() {
   const [pending, setPending] = useState(false);
   const [aiPending, setAiPending] = useState(false);
   const [aiRecommendation, setAiRecommendation] = useState(null);
+  const [publicRelayAvailable, setPublicRelayAvailable] = useState(false);
 
   const contractsReady = Boolean(config?.chessPieceNFT && config?.gameManager);
   const game = useMemo(
@@ -123,6 +125,7 @@ function App() {
   const canJoinActiveMatch = activeMatch?.status === 0
     && activeMatch.creator.toLowerCase() !== account.toLowerCase();
   const localServicesEnabled = Number(config?.chainId) === 31337;
+  const relayEnabled = localServicesEnabled || publicRelayAvailable;
   const isComputerMatch = Boolean(localServicesEnabled && activeMatch && computerMatchIds.includes(activeMatch.id));
   const isParticipant = Boolean(activeMatch && (activeMatch.creator.toLowerCase() === account.toLowerCase()
     || activeMatch.joiner.toLowerCase() === account.toLowerCase()));
@@ -150,7 +153,7 @@ function App() {
   }, [config?.gameManager]);
 
   useEffect(() => {
-    if (!config?.gameManager || !account || !localServicesEnabled) {
+    if (!config?.gameManager || !account || !relayEnabled) {
       setFastSession(null);
       return;
     }
@@ -163,7 +166,24 @@ function App() {
     } catch {
       setFastSession(null);
     }
-  }, [config?.gameManager, account, localServicesEnabled]);
+  }, [config?.gameManager, account, relayEnabled]);
+
+  useEffect(() => {
+    if (!config?.chainId || localServicesEnabled || !RELAY_SERVICE_URL) {
+      setPublicRelayAvailable(false);
+      return undefined;
+    }
+    let cancelled = false;
+    fetch(`${RELAY_SERVICE_URL}/health`, { cache: "no-store" })
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error("Relay health check failed.")))
+      .then((payload) => {
+        if (!cancelled) {
+          setPublicRelayAvailable(Boolean(payload.relayerConfigured && Number(payload.relayChainId) === Number(config.chainId)));
+        }
+      })
+      .catch(() => { if (!cancelled) setPublicRelayAvailable(false); });
+    return () => { cancelled = true; };
+  }, [config?.chainId, localServicesEnabled]);
 
   useEffect(() => {
     setPieceName((currentName) => currentName || pieceDesign.name);
@@ -215,13 +235,13 @@ function App() {
   }, [activeMatch?.id, activeMatch?.creatorPieceId, activeMatch?.joinerPieceId, pieceContract]);
 
   useEffect(() => {
-    if (!localServicesEnabled || !activeMatch || activeMatch.status !== 1 || !isParticipant || hasFastSession
+    if (!relayEnabled || !activeMatch || activeMatch.status !== 1 || !isParticipant || hasFastSession
       || !game || !provider || !account) return;
     const attemptKey = `${config.gameManager}-${account.toLowerCase()}-${activeMatch.id}`;
     if (fastSessionAttempts.current.has(attemptKey)) return;
     fastSessionAttempts.current.add(attemptKey);
     void enableFastMoves();
-  }, [activeMatch?.id, activeMatch?.status, isParticipant, hasFastSession, game, provider, account, config?.gameManager, localServicesEnabled]);
+  }, [activeMatch?.id, activeMatch?.status, isParticipant, hasFastSession, game, provider, account, config?.gameManager, relayEnabled]);
 
   useEffect(() => {
     if (!window.ethereum?.on) return undefined;
@@ -386,6 +406,31 @@ function App() {
     return callLocalService(endpoint, { matchId }, "Local computer is preparing its move…");
   }
 
+  async function callRelayService(endpoint, body, statusMessage) {
+    if (localServicesEnabled) return callLocalService(`relay/${endpoint}`, body, statusMessage);
+    if (!publicRelayAvailable || !RELAY_SERVICE_URL) throw new Error("The Sepolia fast-move relay is unavailable.");
+    setNotice(statusMessage);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 60000);
+    try {
+      const response = await fetch(`${RELAY_SERVICE_URL}/relay/${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "The Sepolia fast-move relay did not respond.");
+      await refresh();
+      return payload;
+    } catch (error) {
+      if (error.name === "AbortError") throw new Error("The Sepolia fast-move relay timed out.");
+      throw error;
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
+
   async function enableFastMoves() {
     if (!game || !provider || !account) return;
     try {
@@ -401,7 +446,7 @@ function App() {
       );
       setNotice("Approve the one-time fast-move session in MetaMask…");
       const signature = await signer.signMessage(getBytes(authorization));
-      await callLocalService("relay/activate", {
+      await callRelayService("activate", {
         player: account,
         sessionKey: sessionWallet.address,
         expiresAt: String(expiresAt),
@@ -430,7 +475,7 @@ function App() {
         [config.gameManager, BigInt(config.chainId), BigInt(activeMatch.id), x, y, account, BigInt(signatureDeadline)]
       );
       const signature = await sessionWallet.signMessage(getBytes(authorization));
-      await callLocalService("relay/move", {
+      await callRelayService("move", {
         matchId: activeMatch.id,
         x,
         y,
@@ -573,7 +618,7 @@ function App() {
       <div><p className="eyebrow">ETHEREUM SEPOLIA TESTNET</p><h1>Gobang On-Chain</h1></div>
       <button onClick={connectWallet} disabled={pending}>{account ? `Switch account (${shortAddress(account)})` : "Connect wallet"}</button>
     </header>
-    <p className="network-note"><strong>Transactions use Ethereum Sepolia.</strong> Minting pieces, creating or joining matches, and playing moves require Sepolia test ETH. Do not send mainnet ETH to this game.</p>
+    <p className="network-note"><strong>Transactions use Ethereum Sepolia.</strong> Minting pieces and creating or joining matches require a MetaMask confirmation. When the relay is available, one session signature enables no-popup moves for two hours. Do not send mainnet ETH to this game.</p>
     <p className="notice">{notice}</p>
     {!contractsReady && <p className="warning">Contracts are not deployed for this network. Deploy contracts, then update this client configuration.</p>}
 
@@ -615,7 +660,7 @@ function App() {
 
     {activeMatch && <section className="game"><div className="section-title"><div><p className="eyebrow">MATCH #{activeMatch.id}</p><h2>{statusLabel(activeMatch)}</h2></div>{canJoinActiveMatch && <button onClick={() => joinMatch(activeMatch.id)} disabled={!selectedPiece || pending}>Join with selected piece</button>}{activeMatch.status === 1 && <button className="secondary" onClick={resign} disabled={pending}>Resign</button>}{isTurnExpired && <button className="secondary" onClick={settleExpiredMatch} disabled={pending}>Settle expired match</button>}</div>
       {activeMatch.status === 0 && <p>This match is waiting for a second wallet to join. The creator will play black and make the first move after joining.</p>}
-      {activeMatch.status === 1 && <><p>{isTurnExpired ? "This turn has expired. Settle the match to award the win to the other player." : (isComputerMatch ? (canPlay ? "Your turn — you play black." : "Local computer is thinking…") : `${shortAddress(activeMatch.currentPlayer)} to move${canPlay ? " — your turn" : ""}. Live updates run every 3 seconds.`)}</p>{localServicesEnabled && isParticipant && <div className="fast-moves">{hasFastSession ? <span>⚡ Fast moves are enabled for this browser session.</span> : <button className="secondary" onClick={enableFastMoves} disabled={pending}>Retry fast moves</button>} {!hasFastSession && <small>Fast-move authorization opens automatically once per active match. One MetaMask signature enables no-popup moves for two hours.</small>}</div>}{isParticipant && <div className="ai-advisor"><div><p className="eyebrow">AGENTKIT + DEEPSEEK</p><strong>AI move advisor</strong></div><button className="secondary" onClick={requestAiRecommendation} disabled={!canPlay || aiPending || pending || isTurnExpired || !AI_RECOMMENDER_URL}>{aiPending ? "Analyzing…" : "Recommend a move"}</button>{aiRecommendation ? <p><b>{boardCoordinate(aiRecommendation.x, aiRecommendation.y)}</b> — {aiRecommendation.reason} <small>{Math.round(Number(aiRecommendation.confidence) * 100)}% confidence</small></p> : <small>{AI_RECOMMENDER_URL ? (canPlay ? "Suggestions highlight a legal empty intersection but never play it automatically." : "A recommendation is available on your turn.") : "Configure VITE_AI_RECOMMENDER_URL to enable recommendations."}</small>}</div>}<div className="skin-legend"><span><i style={{ "--stone-primary": matchSkins.creator.primary, "--stone-secondary": matchSkins.creator.secondary }} />Black: {matchSkins.creator.style}</span><span><i style={{ "--stone-primary": matchSkins.joiner.primary, "--stone-secondary": matchSkins.joiner.secondary }} />White: {matchSkins.joiner.style}</span></div>{renderMatchBoard()}</>}
+      {activeMatch.status === 1 && <><p>{isTurnExpired ? "This turn has expired. Settle the match to award the win to the other player." : (isComputerMatch ? (canPlay ? "Your turn — you play black." : "Local computer is thinking…") : `${shortAddress(activeMatch.currentPlayer)} to move${canPlay ? " — your turn" : ""}. Live updates run every 3 seconds.`)}</p>{relayEnabled && isParticipant && <div className="fast-moves">{hasFastSession ? <span>⚡ Fast moves are enabled for this browser session.</span> : <button className="secondary" onClick={enableFastMoves} disabled={pending}>Retry fast moves</button>} {!hasFastSession && <small>Fast-move authorization opens automatically once per active match. One MetaMask signature enables no-popup moves for two hours.</small>}</div>}{isParticipant && <div className="ai-advisor"><div><p className="eyebrow">AGENTKIT + DEEPSEEK</p><strong>AI move advisor</strong></div><button className="secondary" onClick={requestAiRecommendation} disabled={!canPlay || aiPending || pending || isTurnExpired || !AI_RECOMMENDER_URL}>{aiPending ? "Analyzing…" : "Recommend a move"}</button>{aiRecommendation ? <p><b>{boardCoordinate(aiRecommendation.x, aiRecommendation.y)}</b> — {aiRecommendation.reason} <small>{Math.round(Number(aiRecommendation.confidence) * 100)}% confidence</small></p> : <small>{AI_RECOMMENDER_URL ? (canPlay ? "Suggestions highlight a legal empty intersection but never play it automatically." : "A recommendation is available on your turn.") : "Configure VITE_AI_RECOMMENDER_URL to enable recommendations."}</small>}</div>}<div className="skin-legend"><span><i style={{ "--stone-primary": matchSkins.creator.primary, "--stone-secondary": matchSkins.creator.secondary }} />Black: {matchSkins.creator.style}</span><span><i style={{ "--stone-primary": matchSkins.joiner.primary, "--stone-secondary": matchSkins.joiner.secondary }} />White: {matchSkins.joiner.style}</span></div>{renderMatchBoard()}</>}
       {activeMatch.status === 2 && <><p>{activeMatch.winner !== EMPTY_ADDRESS ? `${shortAddress(activeMatch.winner)} won.` : "This match ended without a winner."} Finish reason: {finishReasonLabel(activeMatch.reason)}.</p><p className="snapshot-title">Final board snapshot</p><div className="skin-legend"><span><i style={{ "--stone-primary": matchSkins.creator.primary, "--stone-secondary": matchSkins.creator.secondary }} />Black: {matchSkins.creator.style}</span><span><i style={{ "--stone-primary": matchSkins.joiner.primary, "--stone-secondary": matchSkins.joiner.secondary }} />White: {matchSkins.joiner.style}</span></div>{renderMatchBoard(true)}</>}
     </section>}
   </main>;

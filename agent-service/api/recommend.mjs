@@ -1,15 +1,9 @@
 import { createGobangRecommender } from "../src/recommender.mjs";
+import { applyVercelCors, isAllowedOrigin, parseAllowedOrigins } from "../src/cors.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
 const DEFAULT_REQUESTS_PER_MINUTE = 10;
 let recommenderPromise;
-
-function parseAllowedOrigins(value) {
-  return new Set((value || "http://127.0.0.1:5173,http://localhost:5173")
-    .split(",")
-    .map((origin) => origin.trim())
-    .filter(Boolean));
-}
 
 function clientAddress(request) {
   const forwardedFor = request.headers["x-forwarded-for"];
@@ -30,12 +24,6 @@ function requestBody(request) {
   return raw ? JSON.parse(raw) : {};
 }
 
-function applyCors(response, origin, allowedOrigins) {
-  response.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  response.setHeader("Access-Control-Allow-Headers", "Content-Type");
-  if (origin && allowedOrigins.has(origin)) response.setHeader("Access-Control-Allow-Origin", origin);
-}
-
 async function defaultRecommender(input) {
   recommenderPromise ||= createGobangRecommender();
   const recommend = await recommenderPromise;
@@ -51,9 +39,9 @@ export function createVercelRecommendationHandler({
 
   return async function recommendationHandler(request, response) {
     const origin = request.headers.origin;
-    applyCors(response, origin, allowedOrigins);
+    applyVercelCors(response, origin, allowedOrigins, "POST, OPTIONS");
 
-    if (origin && !allowedOrigins.has(origin)) {
+    if (!isAllowedOrigin(origin, allowedOrigins)) {
       return response.status(403).json({ error: "This origin is not allowed." });
     }
     if (request.method === "OPTIONS") return response.status(204).end();

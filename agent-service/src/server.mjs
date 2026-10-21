@@ -2,15 +2,9 @@ import "dotenv/config";
 import http from "node:http";
 import { pathToFileURL } from "node:url";
 import { createGobangRecommender } from "./recommender.mjs";
+import { isAllowedOrigin, parseAllowedOrigins } from "./cors.mjs";
 
 const MAX_BODY_BYTES = 64 * 1024;
-
-function parseAllowedOrigins(value) {
-  return new Set((value || "http://127.0.0.1:5173,http://localhost:5173")
-    .split(",")
-    .map((origin) => origin.trim())
-    .filter(Boolean));
-}
 
 function sendJson(response, status, payload, origin, allowedOrigins) {
   const headers = {
@@ -44,7 +38,7 @@ export function createRecommendationServer({
 
   return http.createServer(async (request, response) => {
     const origin = request.headers.origin;
-    if (origin && !allowedOrigins.has(origin)) {
+    if (!isAllowedOrigin(origin, allowedOrigins)) {
       return sendJson(response, 403, { error: "This origin is not allowed." }, origin, allowedOrigins);
     }
     if (request.method === "OPTIONS") return sendJson(response, 204, {}, origin, allowedOrigins);

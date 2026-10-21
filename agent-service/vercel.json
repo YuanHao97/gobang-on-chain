@@ -3,11 +3,16 @@
   "functions": {
     "api/recommend.mjs": {
       "maxDuration": 60
+    },
+    "api/relay.mjs": {
+      "maxDuration": 60
     }
   },
   "rewrites": [
     { "source": "/", "destination": "/api/health" },
     { "source": "/health", "destination": "/api/health" },
-    { "source": "/recommend", "destination": "/api/recommend" }
+    { "source": "/recommend", "destination": "/api/recommend" },
+    { "source": "/relay/activate", "destination": "/api/relay?operation=activate" },
+    { "source": "/relay/move", "destination": "/api/relay?operation=move" }
   ]
 }

@@ -17,9 +17,10 @@ function mockResponse() {
 
 test("serves Vercel health responses", () => {
   const response = mockResponse();
-  healthHandler({ method: "GET" }, response);
+  healthHandler({ method: "GET", headers: { origin: "https://yuanhao97.github.io" } }, response);
   assert.equal(response.statusCode, 200);
   assert.equal(response.payload.ok, true);
+  assert.equal(response.headers["Access-Control-Allow-Origin"], "https://yuanhao97.github.io");
 });
 
 test("serves Vercel recommendation responses with approved CORS", async () => {
@@ -49,4 +50,25 @@ test("rejects unapproved Vercel browser origins", async () => {
 
   await handler({ method: "POST", headers: { origin: "https://untrusted.example" }, body: {} }, response);
   assert.equal(response.statusCode, 403);
+});
+
+test("normalizes configured origins that include a path", async () => {
+  const previousOrigins = process.env.AI_ALLOWED_ORIGINS;
+  process.env.AI_ALLOWED_ORIGINS = "https://yuanhao97.github.io/gobang-on-chain/";
+  try {
+    const response = mockResponse();
+    await createVercelRecommendationHandler({
+      recommend: async () => ({ x: 7 }),
+      allowedOrigins: undefined
+    })({
+      method: "OPTIONS",
+      headers: { origin: "https://yuanhao97.github.io" }
+    }, response);
+    assert.equal(response.statusCode, 204);
+    assert.equal(response.headers["Access-Control-Allow-Origin"], "https://yuanhao97.github.io");
+    assert.equal(response.headers.Vary, "Origin");
+  } finally {
+    if (previousOrigins === undefined) delete process.env.AI_ALLOWED_ORIGINS;
+    else process.env.AI_ALLOWED_ORIGINS = previousOrigins;
+  }
 });

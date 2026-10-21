@@ -159,9 +159,27 @@ The local web client automatically uses `http://127.0.0.1:8790`. The DeepSeek AP
 
 For a public deployment, host `agent-service` on an HTTPS-capable Node.js 22 service, set `AI_RECOMMENDER_HOST=0.0.0.0` and `AI_ALLOWED_ORIGINS=https://yuanhao97.github.io` there, and add the backend URL as a GitHub Actions repository variable named `VITE_AI_RECOMMENDER_URL`. The public AI button remains disabled until that backend URL is configured; the rest of the game continues to work normally.
 
-For Vercel, import this repository, set the project root directory to `agent-service`, and add `DEEPSEEK_API_KEY`, `DEEPSEEK_MODEL=deepseek-flash`, and `AI_ALLOWED_ORIGINS=https://yuanhao97.github.io` as environment variables. The included Vercel Functions expose `/health` and `/recommend`; each push to the selected branch triggers a new deployment.
+For Vercel, import this repository, set the project root directory to `agent-service`, and add `DEEPSEEK_API_KEY`, `DEEPSEEK_MODEL=deepseek-flash`, and `AI_ALLOWED_ORIGINS=https://yuanhao97.github.io` as environment variables. Use origins only (`https://yuanhao97.github.io`), not page paths. The handler also normalizes a mistakenly configured URL that includes `/gobang-on-chain/`. The included Vercel Functions expose `/health` and `/recommend`; each push to the selected branch triggers a new deployment.
 
-The recommendation provider is deliberately read-only: it uses no wallet private key, cannot send a transaction, and validates model output against the submitted board before returning it.
+The recommendation endpoint is read-only: it uses no wallet private key, cannot send a transaction, and validates model output against the submitted board before returning it.
+
+### Sepolia fast moves
+
+The deployed game contract supports a short-lived session key for moves. The player approves one session signature in MetaMask, then a relay submits signed moves and pays their Sepolia gas for up to two hours. The session key is stored only in that browser tab and can call only the contract's move path; it cannot transfer wallet assets.
+
+To enable the relay in the existing Vercel project, add these server-side environment variables and redeploy:
+
+```text
+SEPOLIA_RPC_URL=https://your-sepolia-rpc.example/v1/your-key
+RELAYER_PRIVATE_KEY=0xyour_dedicated_sepolia_relayer_private_key
+GAME_MANAGER_ADDRESS=0x42B9B91bbFaA6c48A91592B0730722DAc05f1Fd1
+RELAY_CHAIN_ID=11155111
+RELAY_ALLOWED_ORIGINS=https://yuanhao97.github.io
+```
+
+Use a separate test-only relay wallet with a small Sepolia ETH balance. Never use the deployer key or a wallet that holds real assets. Set the GitHub Actions repository variable `VITE_RELAY_URL` to the Vercel service URL; the workflow falls back to `https://gobang-on-chain.vercel.app`. The frontend checks `/health` and enables fast moves only when all relay settings are present.
+
+Minting, creating a match, and joining a match still use normal wallet transactions because the currently deployed contracts authorize those operations with `msg.sender`. Removing those confirmations requires a new contract deployment with scoped meta-transactions or a smart-account/session-key design.
 
 ## Deploy to Ethereum Sepolia
 
