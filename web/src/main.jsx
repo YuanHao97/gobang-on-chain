@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserProvider, Contract, getBytes, solidityPackedKeccak256, Wallet } from "ethers";
 import { chessPieceAbi, gameManagerAbi } from "./contracts";
+import { queryFilterInChunks } from "./eventLogs";
 import { buildVictoryLeaderboard } from "./leaderboard";
 import { BLACK_FALLBACK_SKIN, PALETTES, skinFromMetadataURI, WHITE_FALLBACK_SKIN } from "./pieceSkin";
 import "./styles.css";
@@ -248,7 +249,10 @@ function App() {
     if (!game || !pieceContract || !account) return;
     try {
       const fromBlock = config.deploymentBlock || 0;
-      const pieceEvents = await pieceContract.queryFilter(pieceContract.filters.ChessPieceCreated(null, account), fromBlock, "latest");
+      const [pieceEvents, matchEvents] = await Promise.all([
+        queryFilterInChunks(pieceContract, pieceContract.filters.ChessPieceCreated(null, account), fromBlock),
+        queryFilterInChunks(game, game.filters.MatchCreated(), fromBlock)
+      ]);
       const loadedPieces = await Promise.all(pieceEvents.map(async (event) => {
         const pieceId = event.args.pieceId;
         const owner = await pieceContract.ownerOf(pieceId);
@@ -258,7 +262,6 @@ function App() {
       setPieces(ownedPieces);
       if (!selectedPiece && ownedPieces[0]) setSelectedPiece(ownedPieces[0].id);
 
-      const matchEvents = await game.queryFilter(game.filters.MatchCreated(), fromBlock, "latest");
       const loadedMatches = await Promise.all(matchEvents.map(async (event) => {
         const id = event.args.matchId.toString();
         const data = await game.getMatch(event.args.matchId);
