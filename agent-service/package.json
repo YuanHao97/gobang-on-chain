@@ -7,8 +7,8 @@
     "node": "22.x"
   },
   "scripts": {
-    "serve:local": "node src/server.mjs",
-    "dev": "node --watch src/server.mjs",
+    "serve:local": "node src/local-server.mjs",
+    "dev": "node --watch src/local-server.mjs",
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {

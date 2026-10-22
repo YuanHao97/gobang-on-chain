@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { once } from "node:events";
-import { createRecommendationServer } from "../src/server.mjs";
+import { createRecommendationServer } from "../src/local-server.mjs";
 
 async function withServer(recommend, callback) {
   const server = createRecommendationServer({
