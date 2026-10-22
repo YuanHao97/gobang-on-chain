@@ -1,4 +1,3 @@
-import "dotenv/config";
 import http from "node:http";
 import { pathToFileURL } from "node:url";
 import { createGobangRecommender } from "./recommender.mjs";
@@ -77,6 +76,11 @@ export function createRecommendationServer({
 }
 
 async function main() {
+  // Vercel injects environment variables. Load .env files only for the local server.
+  if (!process.env.VERCEL) {
+    const { default: dotenv } = await import("dotenv");
+    dotenv.config();
+  }
   const host = process.env.AI_RECOMMENDER_HOST || "127.0.0.1";
   const port = Number(process.env.PORT || process.env.AI_RECOMMENDER_PORT || 8790);
   const recommend = await createGobangRecommender();
