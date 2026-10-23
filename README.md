@@ -173,12 +173,14 @@ To enable the relay in the existing Vercel project, add these server-side enviro
 SEPOLIA_RPC_URL=https://your-sepolia-rpc.example/v1/your-key
 RELAYER_PRIVATE_KEY=0xyour_dedicated_sepolia_relayer_private_key
 GAME_MANAGER_ADDRESS=0x42B9B91bbFaA6c48A91592B0730722DAc05f1Fd1
-GAME_DEPLOYMENT_BLOCK=11933564
+ROBOT_PIECE_ID=the_relay_owned_piece_id
 RELAY_CHAIN_ID=11155111
 RELAY_ALLOWED_ORIGINS=https://yuanhao97.github.io
 ```
 
 Use a separate test-only relay wallet with a small Sepolia ETH balance. Never use the deployer key or a wallet that holds real assets. The same relay wallet pays for signed fast moves and acts as the Sepolia computer opponent, so its wins are recorded under the relay wallet address. Set the GitHub Actions repository variable `VITE_RELAY_URL` to the Vercel service URL; the workflow falls back to `https://gobang-on-chain.vercel.app`. The frontend checks `/health` and enables fast moves and the Sepolia computer only when all relay settings are present.
+
+During first-time setup, leave `ROBOT_PIECE_ID` empty, deploy once, and call `POST /relay/computer/prepare` from an allowed origin. Save the returned `computerPieceId` as `ROBOT_PIECE_ID` in the hosting environment and redeploy. Later instances verify that fixed NFT belongs to the relay account instead of scanning historical logs.
 
 Minting, creating a match, and joining a match still use normal wallet transactions because the currently deployed contracts authorize those operations with `msg.sender`. Removing those confirmations requires a new contract deployment with scoped meta-transactions or a smart-account/session-key design.
 

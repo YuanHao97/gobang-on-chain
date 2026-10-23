@@ -29,7 +29,6 @@ const PIECE_ABI = [
 const MAX_SESSION_SECONDS = 3 * 60 * 60;
 const MAX_MOVE_DEADLINE_SECONDS = 5 * 60;
 const MAX_COMPUTER_JOIN_DEADLINE_SECONDS = 5 * 60;
-const LOG_BLOCK_RANGE = 9_000;
 const COMPUTER_JOIN_DOMAIN = id("GOBANG_SOLO_JOIN_V1");
 
 function requiredString(value, name) {
@@ -139,14 +138,6 @@ export function validateComputerMove(body) {
   return { matchId: matchIdValue(body?.matchId) };
 }
 
-function deploymentBlockValue(value) {
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 0) {
-    throw new Error("GAME_DEPLOYMENT_BLOCK must be a non-negative integer.");
-  }
-  return parsed;
-}
-
 function computerMetadataURI() {
   const metadata = {
     name: "Sepolia Computer",
@@ -165,7 +156,7 @@ export function createSepoliaRelayer({
   privateKey = process.env.RELAYER_PRIVATE_KEY,
   gameManagerAddress = process.env.GAME_MANAGER_ADDRESS,
   chainId = Number(process.env.RELAY_CHAIN_ID || 11155111),
-  deploymentBlock = process.env.GAME_DEPLOYMENT_BLOCK || 0
+  computerPieceId = process.env.ROBOT_PIECE_ID || ""
 } = {}) {
   if (!rpcUrl) throw new Error("The Sepolia relay is not configured.");
   if (!privateKey) throw new Error("The Sepolia relay is not configured.");
@@ -175,36 +166,19 @@ export function createSepoliaRelayer({
   const signer = new NonceManager(wallet);
   const game = new Contract(contractAddress, GAME_ABI, signer);
   const robotAddress = wallet.address;
-  const firstDeploymentBlock = deploymentBlockValue(deploymentBlock);
+  const configuredComputerPieceId = computerPieceId ? unsignedInteger(computerPieceId, "ROBOT_PIECE_ID") : null;
   let computerPiecePromise;
-
-  async function findOwnedComputerPiece(piece) {
-    const filter = piece.filters.ChessPieceCreated(null, robotAddress);
-    const latestBlock = await provider.getBlockNumber();
-    const events = [];
-    for (let fromBlock = firstDeploymentBlock; fromBlock <= latestBlock; fromBlock += LOG_BLOCK_RANGE) {
-      const toBlock = Math.min(fromBlock + LOG_BLOCK_RANGE - 1, latestBlock);
-      events.push(...await piece.queryFilter(filter, fromBlock, toBlock));
-    }
-    for (const event of events.reverse()) {
-      try {
-        const pieceId = event.args.pieceId;
-        const owner = await piece.ownerOf(pieceId);
-        if (owner.toLowerCase() === robotAddress.toLowerCase()) {
-          return { pieceId, transactionHash: null };
-        }
-      } catch {
-        // Ignore burned or otherwise unavailable historical pieces.
-      }
-    }
-    return null;
-  }
 
   async function createComputerPiece() {
     const pieceAddress = await game.chessPiece();
     const piece = new Contract(pieceAddress, PIECE_ABI, signer);
-    const existingPiece = await findOwnedComputerPiece(piece);
-    if (existingPiece !== null) return existingPiece;
+    if (configuredComputerPieceId !== null) {
+      const owner = await piece.ownerOf(configuredComputerPieceId);
+      if (owner.toLowerCase() !== robotAddress.toLowerCase()) {
+        throw new Error("ROBOT_PIECE_ID is not owned by the relay account.");
+      }
+      return { pieceId: configuredComputerPieceId, transactionHash: null };
+    }
 
     const transaction = await piece.mint("Sepolia Computer", computerMetadataURI());
     const receipt = await transaction.wait(1);
