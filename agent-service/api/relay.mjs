@@ -69,7 +69,7 @@ export function createVercelRelayHandler({ getRelayer = configuredRelayer } = {}
 
     try {
       const operation = String(request.query?.operation || "");
-      if (operation !== "activate" && operation !== "move") {
+      if (!["activate", "move", "computerJoin", "computerMove"].includes(operation)) {
         return response.status(404).json({ error: "Unknown relay operation." });
       }
       const body = requestBody(request);

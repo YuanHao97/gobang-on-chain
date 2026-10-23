@@ -20,7 +20,7 @@ The live demo uses Ethereum Sepolia test ETH only. Do not send mainnet ETH to th
 - Ask a Coinbase AgentKit-powered advisor to recommend a legal move without playing it automatically.
 - Resign a match or settle an expired turn on-chain.
 - Open any completed match to inspect its final board snapshot and finish reason.
-- Run a local single-player match against a Hardhat computer account during development.
+- Play a fully on-chain single-player match against the Sepolia relay account, or use the local Hardhat computer during development.
 
 ## How a Match Works
 
@@ -45,9 +45,9 @@ The contracts are the authoritative game engine. The client reads board cells an
 
 ## Game Modes
 
-### Sepolia Multiplayer
+### Sepolia Multiplayer and Computer Match
 
-The public demo runs against Ethereum Sepolia. Minting, creating or joining matches, and playing moves are testnet transactions, so a connected wallet needs Sepolia test ETH. Each move requires wallet confirmation because the public deployment does not run a trusted transaction relay.
+The public demo runs against Ethereum Sepolia. Minting and creating or joining matches are testnet transactions, so a connected wallet needs Sepolia test ETH. The public relay supports short-lived fast-move sessions and also acts as the white-stone computer account in single-player matches. The computer mints its own chess-piece NFT, joins the match, and submits every move as a real Sepolia transaction.
 
 ### Local Multiplayer and Computer Match
 
@@ -173,11 +173,12 @@ To enable the relay in the existing Vercel project, add these server-side enviro
 SEPOLIA_RPC_URL=https://your-sepolia-rpc.example/v1/your-key
 RELAYER_PRIVATE_KEY=0xyour_dedicated_sepolia_relayer_private_key
 GAME_MANAGER_ADDRESS=0x42B9B91bbFaA6c48A91592B0730722DAc05f1Fd1
+GAME_DEPLOYMENT_BLOCK=11933564
 RELAY_CHAIN_ID=11155111
 RELAY_ALLOWED_ORIGINS=https://yuanhao97.github.io
 ```
 
-Use a separate test-only relay wallet with a small Sepolia ETH balance. Never use the deployer key or a wallet that holds real assets. Set the GitHub Actions repository variable `VITE_RELAY_URL` to the Vercel service URL; the workflow falls back to `https://gobang-on-chain.vercel.app`. The frontend checks `/health` and enables fast moves only when all relay settings are present.
+Use a separate test-only relay wallet with a small Sepolia ETH balance. Never use the deployer key or a wallet that holds real assets. The same relay wallet pays for signed fast moves and acts as the Sepolia computer opponent, so its wins are recorded under the relay wallet address. Set the GitHub Actions repository variable `VITE_RELAY_URL` to the Vercel service URL; the workflow falls back to `https://gobang-on-chain.vercel.app`. The frontend checks `/health` and enables fast moves and the Sepolia computer only when all relay settings are present.
 
 Minting, creating a match, and joining a match still use normal wallet transactions because the currently deployed contracts authorize those operations with `msg.sender`. Removing those confirmations requires a new contract deployment with scoped meta-transactions or a smart-account/session-key design.
 

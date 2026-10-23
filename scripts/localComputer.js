@@ -1,7 +1,6 @@
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
-const { pathToFileURL } = require("url");
 const { Contract, JsonRpcProvider, NonceManager, Wallet } = require("ethers");
 
 const PORT = 8787;
@@ -97,16 +96,16 @@ async function playMove(matchId) {
     return { skipped: true, reason: "It is not the computer's turn." };
   }
 
-  const { chooseComputerMove } = await import(pathToFileURL(path.join(__dirname, "..", "web", "src", "soloGame.js")).href);
+  const { rankCandidateMoves } = await import(path.join(__dirname, "..", "agent-service", "src", "game.mjs"));
   const boardSize = Number(match.boardSize);
   const cells = await Promise.all(Array.from({ length: boardSize * boardSize }, async (_, index) => {
     const x = index % boardSize;
     const y = Math.floor(index / boardSize);
     return Number(await game.getCell(matchId, x, y));
   }));
-  const index = chooseComputerMove(cells);
-  if (index === null) return { skipped: true, reason: "The board is full." };
-  const transaction = await game.playMove(matchId, index % boardSize, Math.floor(index / boardSize));
+  const [selectedMove] = rankCandidateMoves({ board: cells, boardSize, playerStone: 2 }, 1);
+  const index = selectedMove.y * boardSize + selectedMove.x;
+  const transaction = await game.playMove(matchId, selectedMove.x, selectedMove.y);
   const receipt = await transaction.wait();
   return { transactionHash: receipt.hash, index };
 }

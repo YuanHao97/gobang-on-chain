@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Wallet } from "ethers";
-import { validateActivation, validateMove } from "../src/relay.mjs";
+import { Wallet, getBytes } from "ethers";
+import {
+  computerJoinAuthorization,
+  validateActivation,
+  validateComputerJoin,
+  validateComputerMove,
+  validateMove
+} from "../src/relay.mjs";
 import { createVercelRelayHandler } from "../api/relay.mjs";
 
 function mockResponse() {
@@ -46,6 +52,36 @@ test("validates bounded relay payloads", () => {
   assert.throws(() => validateMove({ ...input.move, x: 15 }), /0 to 14/);
 });
 
+test("requires a match-creator signature before the computer joins", async () => {
+  const player = Wallet.createRandom();
+  const gameManager = Wallet.createRandom().address;
+  const authorizationDeadline = Math.floor(Date.now() / 1000) + 120;
+  const authorization = computerJoinAuthorization(
+    gameManager,
+    11155111,
+    7,
+    player.address,
+    authorizationDeadline
+  );
+  const signature = await player.signMessage(getBytes(authorization));
+  const input = validateComputerJoin({
+    matchId: "7",
+    player: player.address,
+    authorizationDeadline: String(authorizationDeadline),
+    signature
+  }, { contractAddress: gameManager, chainId: 11155111 });
+
+  assert.equal(input.matchId, 7n);
+  assert.equal(input.player, player.address);
+  assert.throws(() => validateComputerJoin({
+    matchId: "8",
+    player: player.address,
+    authorizationDeadline: String(authorizationDeadline),
+    signature
+  }, { contractAddress: gameManager, chainId: 11155111 }), /signature is invalid/);
+  assert.equal(validateComputerMove({ matchId: "9" }).matchId, 9n);
+});
+
 test("serves an approved relay request with CORS", async () => {
   const input = validInput();
   const handler = createVercelRelayHandler({
@@ -66,5 +102,24 @@ test("serves an approved relay request with CORS", async () => {
   assert.equal(response.statusCode, 200);
   assert.equal(response.payload.transactionHash, "0x1234");
   assert.equal(response.headers["Access-Control-Allow-Origin"], "https://yuanhao97.github.io");
+});
+
+test("routes computer operations through the transaction queue", async () => {
+  const handler = createVercelRelayHandler({
+    getRelayer: async () => ({
+      computerMove: async (body) => ({ transactionHash: "0xabcd", matchId: body.matchId })
+    })
+  });
+  const response = mockResponse();
+  await handler({
+    method: "POST",
+    query: { operation: "computerMove" },
+    headers: { origin: "https://yuanhao97.github.io", "x-forwarded-for": "computer-test" },
+    body: { matchId: "4" }
+  }, response);
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.payload.transactionHash, "0xabcd");
+  assert.equal(response.payload.matchId, "4");
 });
 

@@ -1,4 +1,5 @@
 import { applyVercelCors, isAllowedOrigin, parseAllowedOrigins } from "../src/cors.mjs";
+import { Wallet } from "ethers";
 
 export default function healthHandler(request, response) {
   const origin = request.headers?.origin;
@@ -19,10 +20,12 @@ export default function healthHandler(request, response) {
     && /^0x[0-9a-fA-F]{64}$/.test(process.env.RELAYER_PRIVATE_KEY || "")
     && /^0x[0-9a-fA-F]{40}$/.test(process.env.GAME_MANAGER_ADDRESS || "")
   );
+  const robotAddress = relayerConfigured ? new Wallet(process.env.RELAYER_PRIVATE_KEY).address : null;
   return response.status(200).json({
     ok: true,
     service: "gobang-agentkit-recommender",
     relayerConfigured,
-    relayChainId: Number(process.env.RELAY_CHAIN_ID || 11155111)
+    relayChainId: Number(process.env.RELAY_CHAIN_ID || 11155111),
+    robotAddress
   });
 }

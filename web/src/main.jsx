@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserProvider, Contract, getBytes, solidityPackedKeccak256, Wallet } from "ethers";
+import { BrowserProvider, Contract, getBytes, id, solidityPackedKeccak256, Wallet } from "ethers";
 import { chessPieceAbi, gameManagerAbi } from "./contracts";
 import { queryFilterInChunks } from "./eventLogs";
 import { buildVictoryLeaderboard } from "./leaderboard";
@@ -110,6 +110,7 @@ function App() {
   const [aiPending, setAiPending] = useState(false);
   const [aiRecommendation, setAiRecommendation] = useState(null);
   const [publicRelayAvailable, setPublicRelayAvailable] = useState(false);
+  const [robotAddress, setRobotAddress] = useState("");
 
   const contractsReady = Boolean(config?.chessPieceNFT && config?.gameManager);
   const game = useMemo(
@@ -126,7 +127,12 @@ function App() {
     && activeMatch.creator.toLowerCase() !== account.toLowerCase();
   const localServicesEnabled = Number(config?.chainId) === 31337;
   const relayEnabled = localServicesEnabled || publicRelayAvailable;
-  const isComputerMatch = Boolean(localServicesEnabled && activeMatch && computerMatchIds.includes(activeMatch.id));
+  const computerEnabled = localServicesEnabled || Boolean(publicRelayAvailable && robotAddress);
+  const isComputerMatch = Boolean(activeMatch && (
+    (localServicesEnabled && computerMatchIds.includes(activeMatch.id))
+    || (!localServicesEnabled && robotAddress
+      && activeMatch.joiner.toLowerCase() === robotAddress.toLowerCase())
+  ));
   const isParticipant = Boolean(activeMatch && (activeMatch.creator.toLowerCase() === account.toLowerCase()
     || activeMatch.joiner.toLowerCase() === account.toLowerCase()));
   const isTurnExpired = Boolean(activeMatch?.status === 1
@@ -171,6 +177,7 @@ function App() {
   useEffect(() => {
     if (!config?.chainId || localServicesEnabled || !RELAY_SERVICE_URL) {
       setPublicRelayAvailable(false);
+      setRobotAddress("");
       return undefined;
     }
     let cancelled = false;
@@ -179,9 +186,15 @@ function App() {
       .then((payload) => {
         if (!cancelled) {
           setPublicRelayAvailable(Boolean(payload.relayerConfigured && Number(payload.relayChainId) === Number(config.chainId)));
+          setRobotAddress(payload.robotAddress || "");
         }
       })
-      .catch(() => { if (!cancelled) setPublicRelayAvailable(false); });
+      .catch(() => {
+        if (!cancelled) {
+          setPublicRelayAvailable(false);
+          setRobotAddress("");
+        }
+      });
     return () => { cancelled = true; };
   }, [config?.chainId, localServicesEnabled]);
 
@@ -402,8 +415,11 @@ function App() {
     }
   }
 
-  function callLocalComputer(endpoint, matchId) {
-    return callLocalService(endpoint, { matchId }, "Local computer is preparing its move…");
+  function callComputer(endpoint, body, statusMessage) {
+    if (localServicesEnabled) {
+      return callLocalService(endpoint, body, statusMessage || "Local computer is preparing its move…");
+    }
+    return callRelayService(`computer/${endpoint}`, body, statusMessage || "Sepolia computer is preparing its move…");
   }
 
   async function callRelayService(endpoint, body, statusMessage) {
@@ -484,7 +500,7 @@ function App() {
         signature
       }, "Submitting your fast move…");
       if (isComputerMatch) {
-        await callLocalComputer("move", activeMatch.id);
+        await callComputer("move", { matchId: activeMatch.id }, "Computer is submitting its on-chain move…");
         setNotice("Computer move confirmed. Your turn.");
       } else {
         setNotice("Move confirmed. The opponent board will update automatically.");
@@ -496,31 +512,83 @@ function App() {
     }
   }
 
-  function createComputerMatch() {
-    if (!localServicesEnabled) return setNotice("The local computer is available only on the local Hardhat network.");
+  async function joinComputerToMatch(matchId, signer) {
+    let joinBody = { matchId };
+    if (!localServicesEnabled) {
+      const latestBlock = await provider.getBlock("latest");
+      const authorizationDeadline = Number(latestBlock.timestamp) + 300;
+      const authorization = solidityPackedKeccak256(
+        ["bytes32", "address", "uint256", "uint256", "address", "uint64"],
+        [
+          id("GOBANG_SOLO_JOIN_V1"),
+          config.gameManager,
+          BigInt(config.chainId),
+          BigInt(matchId),
+          account,
+          BigInt(authorizationDeadline)
+        ]
+      );
+      setNotice("Approve the one-time invitation for the Sepolia computer…");
+      const signature = await signer.signMessage(getBytes(authorization));
+      joinBody = {
+        matchId,
+        player: account,
+        authorizationDeadline: String(authorizationDeadline),
+        signature
+      };
+    }
+
+    await callComputer(
+      "join",
+      joinBody,
+      localServicesEnabled
+        ? "Local computer is joining the match…"
+        : "Sepolia computer is minting or selecting its piece and joining on-chain…"
+    );
+    setComputerMatchIds((currentIds) => {
+      const nextIds = [...new Set([...currentIds, String(matchId)])];
+      localStorage.setItem(`gobang-computer-matches-${config.gameManager}`, JSON.stringify(nextIds));
+      return nextIds;
+    });
+    setSelectedMatch(String(matchId));
+    await refresh();
+    setNotice("Computer joined on-chain. You play black and move first.");
+  }
+
+  async function inviteComputer(matchId) {
+    try {
+      setPending(true);
+      const signer = await provider.getSigner();
+      await joinComputerToMatch(matchId, signer);
+    } catch (error) {
+      setNotice(displayError(error));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function createComputerMatch() {
+    if (!computerEnabled) return setNotice("The computer opponent service is unavailable.");
     if (!selectedPiece) return setNotice("Create or select a chess piece first.");
     const duration = Number(turnMinutes) * 60;
-    return (async () => {
-      try {
-        const matchId = (await game.nextMatchId()).toString();
-        await send(
-          (signer) => game.connect(signer).createMatch(selectedPiece, 15, duration),
-          "Match created. Local computer is joining…",
-          async () => {
-            await callLocalComputer("join", matchId);
-            setComputerMatchIds((currentIds) => {
-              const nextIds = [...new Set([...currentIds, matchId])];
-              localStorage.setItem(`gobang-computer-matches-${config.gameManager}`, JSON.stringify(nextIds));
-              return nextIds;
-            });
-            setSelectedMatch(matchId);
-            setNotice("Computer joined. You play black and move first.");
-          }
-        );
-      } catch (error) {
-        setNotice(displayError(error));
-      }
-    })();
+    try {
+      setPending(true);
+      const signer = await provider.getSigner();
+      const transaction = await game.connect(signer).createMatch(selectedPiece, 15, duration);
+      setNotice("Creating the on-chain computer match…");
+      const receipt = await transaction.wait(1, 30000);
+      if (!receipt) throw new Error("Match creation timed out. Check the wallet activity and refresh the page.");
+      const created = receipt.logs.map((log) => {
+        try { return game.interface.parseLog(log); } catch { return null; }
+      }).find((event) => event?.name === "MatchCreated");
+      if (!created) throw new Error("The match creation event was not found.");
+      const matchId = created.args.matchId.toString();
+      await joinComputerToMatch(matchId, signer);
+    } catch (error) {
+      setNotice(displayError(error));
+    } finally {
+      setPending(false);
+    }
   }
 
   function joinMatch(matchId) {
@@ -537,7 +605,7 @@ function App() {
       (signer) => game.connect(signer).playMove(activeMatch.id, x, y),
       "Move confirmed.",
       isComputerMatch ? async () => {
-        await callLocalComputer("move", activeMatch.id);
+        await callComputer("move", { matchId: activeMatch.id }, "Computer is submitting its on-chain move…");
         setNotice("Computer move confirmed. Your turn.");
       } : undefined
     );
@@ -618,7 +686,7 @@ function App() {
       <div><p className="eyebrow">ETHEREUM SEPOLIA TESTNET</p><h1>Gobang On-Chain</h1></div>
       <button onClick={connectWallet} disabled={pending}>{account ? `Switch account (${shortAddress(account)})` : "Connect wallet"}</button>
     </header>
-    <p className="network-note"><strong>Transactions use Ethereum Sepolia.</strong> Minting pieces and creating or joining matches require a MetaMask confirmation. When the relay is available, one session signature enables no-popup moves for two hours. Do not send mainnet ETH to this game.</p>
+    <p className="network-note"><strong>Transactions use Ethereum Sepolia.</strong> Minting pieces and creating or joining matches require a MetaMask confirmation. Sepolia computer matches use the relay wallet as the on-chain opponent, and every computer move is a real transaction. When the relay is available, one session signature enables no-popup player moves for two hours. Do not send mainnet ETH to this game.</p>
     <p className="notice">{notice}</p>
     {!contractsReady && <p className="warning">Contracts are not deployed for this network. Deploy contracts, then update this client configuration.</p>}
 
@@ -634,7 +702,7 @@ function App() {
       <article><h2>Open a match</h2>
         <label>Chess piece<select value={selectedPiece} onChange={(event) => setSelectedPiece(event.target.value)}><option value="">Select a piece</option>{pieces.map((piece) => <option key={piece.id} value={piece.id}>#{piece.id} — {piece.name}</option>)}</select></label>
         <label>Turn length (minutes)<input type="number" min="1" max="10080" value={turnMinutes} onChange={(event) => setTurnMinutes(event.target.value)} /></label>
-        <div className="actions"><button className="secondary" onClick={createMatch} disabled={!account || pending}>Create multiplayer match</button>{localServicesEnabled && <button onClick={createComputerMatch} disabled={!account || pending}>Play local computer</button>}</div>
+        <div className="actions"><button className="secondary" onClick={createMatch} disabled={!account || pending}>Create multiplayer match</button>{computerEnabled && <button onClick={createComputerMatch} disabled={!account || pending}>{localServicesEnabled ? "Play local computer" : "Play Sepolia computer"}</button>}</div>
       </article>
     </section>
 
@@ -653,14 +721,15 @@ function App() {
     <section className="matches"><div className="section-title"><h2>Match lobby</h2><button className="secondary" onClick={refresh} disabled={!account || pending}>Refresh</button></div>
       {matches.length === 0 ? <p>No matches yet.</p> : <div className="match-list">{matches.map((match) => <button className={`match ${selectedMatch === match.id ? "selected" : ""}`} key={match.id} onClick={() => selectMatch(match.id)}>
         <strong>Match #{match.id}</strong><span>{statusLabel(match)} · {match.moveCount} moves</span><span>Black: {shortAddress(match.creator)}</span>
+        {!localServicesEnabled && robotAddress && match.joiner.toLowerCase() === robotAddress.toLowerCase() && <span>Computer opponent · fully on-chain</span>}
         {match.status === 0 && match.creator.toLowerCase() !== account.toLowerCase() && <span className="join">Available to join</span>}
         {match.status === 2 && <span className="snapshot-link">View final board snapshot</span>}
       </button>)}</div>}
     </section>
 
-    {activeMatch && <section className="game"><div className="section-title"><div><p className="eyebrow">MATCH #{activeMatch.id}</p><h2>{statusLabel(activeMatch)}</h2></div>{canJoinActiveMatch && <button onClick={() => joinMatch(activeMatch.id)} disabled={!selectedPiece || pending}>Join with selected piece</button>}{activeMatch.status === 1 && <button className="secondary" onClick={resign} disabled={pending}>Resign</button>}{isTurnExpired && <button className="secondary" onClick={settleExpiredMatch} disabled={pending}>Settle expired match</button>}</div>
+    {activeMatch && <section className="game"><div className="section-title"><div><p className="eyebrow">MATCH #{activeMatch.id}</p><h2>{statusLabel(activeMatch)}</h2></div>{canJoinActiveMatch && <button onClick={() => joinMatch(activeMatch.id)} disabled={!selectedPiece || pending}>Join with selected piece</button>}{computerEnabled && activeMatch.status === 0 && activeMatch.creator.toLowerCase() === account.toLowerCase() && <button onClick={() => inviteComputer(activeMatch.id)} disabled={pending}>Invite computer</button>}{activeMatch.status === 1 && <button className="secondary" onClick={resign} disabled={pending}>Resign</button>}{isTurnExpired && <button className="secondary" onClick={settleExpiredMatch} disabled={pending}>Settle expired match</button>}</div>
       {activeMatch.status === 0 && <p>This match is waiting for a second wallet to join. The creator will play black and make the first move after joining.</p>}
-      {activeMatch.status === 1 && <><p>{isTurnExpired ? "This turn has expired. Settle the match to award the win to the other player." : (isComputerMatch ? (canPlay ? "Your turn — you play black." : "Local computer is thinking…") : `${shortAddress(activeMatch.currentPlayer)} to move${canPlay ? " — your turn" : ""}. Live updates run every 3 seconds.`)}</p>{relayEnabled && isParticipant && <div className="fast-moves">{hasFastSession ? <span>⚡ Fast moves are enabled for this browser session.</span> : <button className="secondary" onClick={enableFastMoves} disabled={pending}>Retry fast moves</button>} {!hasFastSession && <small>Fast-move authorization opens automatically once per active match. One MetaMask signature enables no-popup moves for two hours.</small>}</div>}{isParticipant && <div className="ai-advisor"><div><p className="eyebrow">AGENTKIT + DEEPSEEK</p><strong>AI move advisor</strong></div><button className="secondary" onClick={requestAiRecommendation} disabled={!canPlay || aiPending || pending || isTurnExpired || !AI_RECOMMENDER_URL}>{aiPending ? "Analyzing…" : "Recommend a move"}</button>{aiRecommendation ? <p><b>{boardCoordinate(aiRecommendation.x, aiRecommendation.y)}</b> — {aiRecommendation.reason} <small>{Math.round(Number(aiRecommendation.confidence) * 100)}% confidence</small></p> : <small>{AI_RECOMMENDER_URL ? (canPlay ? "Suggestions highlight a legal empty intersection but never play it automatically." : "A recommendation is available on your turn.") : "Configure VITE_AI_RECOMMENDER_URL to enable recommendations."}</small>}</div>}<div className="skin-legend"><span><i style={{ "--stone-primary": matchSkins.creator.primary, "--stone-secondary": matchSkins.creator.secondary }} />Black: {matchSkins.creator.style}</span><span><i style={{ "--stone-primary": matchSkins.joiner.primary, "--stone-secondary": matchSkins.joiner.secondary }} />White: {matchSkins.joiner.style}</span></div>{renderMatchBoard()}</>}
+      {activeMatch.status === 1 && <><p>{isTurnExpired ? "This turn has expired. Settle the match to award the win to the other player." : (isComputerMatch ? (canPlay ? "Your turn — you play black." : "Computer is preparing an on-chain move…") : `${shortAddress(activeMatch.currentPlayer)} to move${canPlay ? " — your turn" : ""}. Live updates run every 3 seconds.`)}</p>{relayEnabled && isParticipant && <div className="fast-moves">{hasFastSession ? <span>⚡ Fast moves are enabled for this browser session.</span> : <button className="secondary" onClick={enableFastMoves} disabled={pending}>Retry fast moves</button>} {!hasFastSession && <small>Fast-move authorization opens automatically once per active match. One MetaMask signature enables no-popup moves for two hours.</small>}</div>}{isParticipant && <div className="ai-advisor"><div><p className="eyebrow">AGENTKIT + DEEPSEEK</p><strong>AI move advisor</strong></div><button className="secondary" onClick={requestAiRecommendation} disabled={!canPlay || aiPending || pending || isTurnExpired || !AI_RECOMMENDER_URL}>{aiPending ? "Analyzing…" : "Recommend a move"}</button>{aiRecommendation ? <p><b>{boardCoordinate(aiRecommendation.x, aiRecommendation.y)}</b> — {aiRecommendation.reason} <small>{Math.round(Number(aiRecommendation.confidence) * 100)}% confidence</small></p> : <small>{AI_RECOMMENDER_URL ? (canPlay ? "Suggestions highlight a legal empty intersection but never play it automatically." : "A recommendation is available on your turn.") : "Configure VITE_AI_RECOMMENDER_URL to enable recommendations."}</small>}</div>}<div className="skin-legend"><span><i style={{ "--stone-primary": matchSkins.creator.primary, "--stone-secondary": matchSkins.creator.secondary }} />Black: {matchSkins.creator.style}</span><span><i style={{ "--stone-primary": matchSkins.joiner.primary, "--stone-secondary": matchSkins.joiner.secondary }} />White: {matchSkins.joiner.style}</span></div>{renderMatchBoard()}</>}
       {activeMatch.status === 2 && <><p>{activeMatch.winner !== EMPTY_ADDRESS ? `${shortAddress(activeMatch.winner)} won.` : "This match ended without a winner."} Finish reason: {finishReasonLabel(activeMatch.reason)}.</p><p className="snapshot-title">Final board snapshot</p><div className="skin-legend"><span><i style={{ "--stone-primary": matchSkins.creator.primary, "--stone-secondary": matchSkins.creator.secondary }} />Black: {matchSkins.creator.style}</span><span><i style={{ "--stone-primary": matchSkins.joiner.primary, "--stone-secondary": matchSkins.joiner.secondary }} />White: {matchSkins.joiner.style}</span></div>{renderMatchBoard(true)}</>}
     </section>}
   </main>;

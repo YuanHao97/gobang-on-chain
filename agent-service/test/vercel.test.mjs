@@ -16,11 +16,27 @@ function mockResponse() {
 }
 
 test("serves Vercel health responses", () => {
+  const previousRpc = process.env.SEPOLIA_RPC_URL;
+  const previousKey = process.env.RELAYER_PRIVATE_KEY;
+  const previousGame = process.env.GAME_MANAGER_ADDRESS;
+  process.env.SEPOLIA_RPC_URL = "https://rpc.example";
+  process.env.RELAYER_PRIVATE_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
+  process.env.GAME_MANAGER_ADDRESS = "0x42B9B91bbFaA6c48A91592B0730722DAc05f1Fd1";
   const response = mockResponse();
-  healthHandler({ method: "GET", headers: { origin: "https://yuanhao97.github.io" } }, response);
-  assert.equal(response.statusCode, 200);
-  assert.equal(response.payload.ok, true);
-  assert.equal(response.headers["Access-Control-Allow-Origin"], "https://yuanhao97.github.io");
+  try {
+    healthHandler({ method: "GET", headers: { origin: "https://yuanhao97.github.io" } }, response);
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.payload.ok, true);
+    assert.equal(response.payload.robotAddress, "0x70997970C51812dc3A010C7d01b50e0d17dc79C8");
+    assert.equal(response.headers["Access-Control-Allow-Origin"], "https://yuanhao97.github.io");
+  } finally {
+    if (previousRpc === undefined) delete process.env.SEPOLIA_RPC_URL;
+    else process.env.SEPOLIA_RPC_URL = previousRpc;
+    if (previousKey === undefined) delete process.env.RELAYER_PRIVATE_KEY;
+    else process.env.RELAYER_PRIVATE_KEY = previousKey;
+    if (previousGame === undefined) delete process.env.GAME_MANAGER_ADDRESS;
+    else process.env.GAME_MANAGER_ADDRESS = previousGame;
+  }
 });
 
 test("serves Vercel recommendation responses with approved CORS", async () => {
