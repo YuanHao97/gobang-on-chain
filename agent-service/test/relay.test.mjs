@@ -123,3 +123,22 @@ test("routes computer operations through the transaction queue", async () => {
   assert.equal(response.payload.matchId, "4");
 });
 
+test("allows the relay to prepare its reusable computer piece", async () => {
+  const handler = createVercelRelayHandler({
+    getRelayer: async () => ({
+      computerPrepare: async () => ({ computerPieceId: "12", created: true, transactionHash: "0x5678" })
+    })
+  });
+  const response = mockResponse();
+  await handler({
+    method: "POST",
+    query: { operation: "computerPrepare" },
+    headers: { origin: "https://yuanhao97.github.io", "x-forwarded-for": "computer-prepare-test" },
+    body: {}
+  }, response);
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.payload.computerPieceId, "12");
+  assert.equal(response.payload.created, true);
+});
+

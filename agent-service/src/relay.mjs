@@ -190,7 +190,9 @@ export function createSepoliaRelayer({
       try {
         const pieceId = event.args.pieceId;
         const owner = await piece.ownerOf(pieceId);
-        if (owner.toLowerCase() === robotAddress.toLowerCase()) return pieceId;
+        if (owner.toLowerCase() === robotAddress.toLowerCase()) {
+          return { pieceId, transactionHash: null };
+        }
       } catch {
         // Ignore burned or otherwise unavailable historical pieces.
       }
@@ -201,8 +203,8 @@ export function createSepoliaRelayer({
   async function createComputerPiece() {
     const pieceAddress = await game.chessPiece();
     const piece = new Contract(pieceAddress, PIECE_ABI, signer);
-    const existingPieceId = await findOwnedComputerPiece(piece);
-    if (existingPieceId !== null) return existingPieceId;
+    const existingPiece = await findOwnedComputerPiece(piece);
+    if (existingPiece !== null) return existingPiece;
 
     const transaction = await piece.mint("Sepolia Computer", computerMetadataURI());
     const receipt = await transaction.wait(1);
@@ -210,7 +212,7 @@ export function createSepoliaRelayer({
       try { return piece.interface.parseLog(log); } catch { return null; }
     }).find((event) => event?.name === "ChessPieceCreated");
     if (!created) throw new Error("The computer chess-piece mint event was not found.");
-    return created.args.pieceId;
+    return { pieceId: created.args.pieceId, transactionHash: receipt.hash };
   }
 
   async function ensureComputerPiece() {
@@ -277,7 +279,7 @@ export function createSepoliaRelayer({
         throw new Error("The relay account cannot play against itself.");
       }
 
-      const pieceId = await ensureComputerPiece();
+      const { pieceId } = await ensureComputerPiece();
       await game.joinMatch.staticCall(input.matchId, pieceId);
       const transaction = await game.joinMatch(input.matchId, pieceId);
       const receipt = await transaction.wait(1);
@@ -285,6 +287,15 @@ export function createSepoliaRelayer({
         transactionHash: receipt.hash,
         computerPieceId: pieceId.toString(),
         robotAddress
+      };
+    },
+    async computerPrepare() {
+      const { pieceId, transactionHash } = await ensureComputerPiece();
+      return {
+        computerPieceId: pieceId.toString(),
+        robotAddress,
+        created: Boolean(transactionHash),
+        transactionHash
       };
     },
     async computerMove(body) {

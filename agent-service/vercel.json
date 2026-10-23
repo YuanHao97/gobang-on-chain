@@ -15,6 +15,7 @@
     { "source": "/recommend", "destination": "/api/recommend" },
     { "source": "/relay/activate", "destination": "/api/relay?operation=activate" },
     { "source": "/relay/move", "destination": "/api/relay?operation=move" },
+    { "source": "/relay/computer/prepare", "destination": "/api/relay?operation=computerPrepare" },
     { "source": "/relay/computer/join", "destination": "/api/relay?operation=computerJoin" },
     { "source": "/relay/computer/move", "destination": "/api/relay?operation=computerMove" }
   ]
