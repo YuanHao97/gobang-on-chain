@@ -15,6 +15,7 @@ const LOCAL_AI_RECOMMENDER_URL = ["127.0.0.1", "localhost"].includes(window.loca
 const AI_RECOMMENDER_URL = (import.meta.env.VITE_AI_RECOMMENDER_URL || LOCAL_AI_RECOMMENDER_URL).replace(/\/$/, "");
 const RELAY_SERVICE_URL = (import.meta.env.VITE_RELAY_URL || "").replace(/\/$/, "");
 const FAST_SESSION_SECONDS = 2 * 60 * 60;
+const DEFAULT_TURN_MINUTES = 100;
 const STYLES = ["Aurora", "Comet", "Ember", "Frost", "Nebula", "Orbit"];
 const NOUNS = ["Stone", "Crown", "Echo", "Rune", "Spark", "Wave"];
 function randomNumber(maximum) {
@@ -104,7 +105,7 @@ function App() {
   const [matchSkins, setMatchSkins] = useState({ creator: BLACK_FALLBACK_SKIN, joiner: WHITE_FALLBACK_SKIN });
   const [fastSession, setFastSession] = useState(null);
   const fastSessionAttempts = useRef(new Set());
-  const [turnMinutes, setTurnMinutes] = useState(10);
+  const [turnMinutes, setTurnMinutes] = useState(DEFAULT_TURN_MINUTES);
   const [notice, setNotice] = useState("Deploy contracts, then connect a wallet.");
   const [pending, setPending] = useState(false);
   const [aiPending, setAiPending] = useState(false);
@@ -500,7 +501,8 @@ function App() {
         signature
       }, "Submitting your fast move…");
       if (isComputerMatch) {
-        await callComputer("move", { matchId: activeMatch.id }, "Computer is submitting its on-chain move…");
+        const computerMove = await callComputer("move", { matchId: activeMatch.id }, "Computer is submitting its on-chain move…");
+        showComputerMove(computerMove);
         setNotice("Computer move confirmed. Your turn.");
       } else {
         setNotice("Move confirmed. The opponent board will update automatically.");
@@ -596,6 +598,19 @@ function App() {
     return send((signer) => game.connect(signer).joinMatch(matchId, selectedPiece), "Match joined. Black moves first.");
   }
 
+  function showComputerMove(result) {
+    if (result?.skipped || !activeMatch) return;
+    const index = Number(result?.index);
+    const cellCount = activeMatch.boardSize * activeMatch.boardSize;
+    if (!Number.isInteger(index) || index < 0 || index >= cellCount) return;
+    setBoard((currentBoard) => {
+      if (currentBoard.length !== cellCount) return currentBoard;
+      const nextBoard = [...currentBoard];
+      nextBoard[index] = 2;
+      return nextBoard;
+    });
+  }
+
   function playMove(index) {
     if (!activeMatch || board[index] !== 0) return;
     const x = index % activeMatch.boardSize;
@@ -605,7 +620,8 @@ function App() {
       (signer) => game.connect(signer).playMove(activeMatch.id, x, y),
       "Move confirmed.",
       isComputerMatch ? async () => {
-        await callComputer("move", { matchId: activeMatch.id }, "Computer is submitting its on-chain move…");
+        const computerMove = await callComputer("move", { matchId: activeMatch.id }, "Computer is submitting its on-chain move…");
+        showComputerMove(computerMove);
         setNotice("Computer move confirmed. Your turn.");
       } : undefined
     );

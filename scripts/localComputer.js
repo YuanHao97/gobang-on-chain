@@ -107,7 +107,7 @@ async function playMove(matchId) {
   const index = selectedMove.y * boardSize + selectedMove.x;
   const transaction = await game.playMove(matchId, selectedMove.x, selectedMove.y);
   const receipt = await transaction.wait();
-  return { transactionHash: receipt.hash, index };
+  return { transactionHash: receipt.hash, x: selectedMove.x, y: selectedMove.y, index };
 }
 
 async function activateSessionKey(body) {
