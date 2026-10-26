@@ -16,6 +16,7 @@ const AI_RECOMMENDER_URL = (import.meta.env.VITE_AI_RECOMMENDER_URL || LOCAL_AI_
 const RELAY_SERVICE_URL = (import.meta.env.VITE_RELAY_URL || "").replace(/\/$/, "");
 const FAST_SESSION_SECONDS = 2 * 60 * 60;
 const DEFAULT_TURN_MINUTES = 100;
+const COMPUTER_RETRY_DELAYS_MS = [5_000, 10_000, 20_000, 30_000];
 const STYLES = ["Aurora", "Comet", "Ember", "Frost", "Nebula", "Orbit"];
 const NOUNS = ["Stone", "Crown", "Echo", "Rune", "Spark", "Wave"];
 function randomNumber(maximum) {
@@ -105,6 +106,8 @@ function App() {
   const [matchSkins, setMatchSkins] = useState({ creator: BLACK_FALLBACK_SKIN, joiner: WHITE_FALLBACK_SKIN });
   const [fastSession, setFastSession] = useState(null);
   const fastSessionAttempts = useRef(new Set());
+  const computerMoveRetry = useRef({ key: "", inFlight: false, failures: 0, timer: null });
+  const [computerRetryVersion, setComputerRetryVersion] = useState(0);
   const [turnMinutes, setTurnMinutes] = useState(DEFAULT_TURN_MINUTES);
   const [notice, setNotice] = useState("Deploy contracts, then connect a wallet.");
   const [pending, setPending] = useState(false);
@@ -130,7 +133,7 @@ function App() {
   const relayEnabled = localServicesEnabled || publicRelayAvailable;
   const computerEnabled = localServicesEnabled || Boolean(publicRelayAvailable && robotAddress);
   const isComputerMatch = Boolean(activeMatch && (
-    (localServicesEnabled && computerMatchIds.includes(activeMatch.id))
+    computerMatchIds.includes(activeMatch.id)
     || (!localServicesEnabled && robotAddress
       && activeMatch.joiner.toLowerCase() === robotAddress.toLowerCase())
   ));
@@ -182,21 +185,36 @@ function App() {
       return undefined;
     }
     let cancelled = false;
-    fetch(`${RELAY_SERVICE_URL}/health`, { cache: "no-store" })
-      .then((response) => response.ok ? response.json() : Promise.reject(new Error("Relay health check failed.")))
-      .then((payload) => {
+    let retryTimer;
+    let failures = 0;
+    async function checkRelay() {
+      try {
+        const response = await fetch(`${RELAY_SERVICE_URL}/health`, { cache: "no-store" });
+        if (!response.ok) throw new Error("Relay health check failed.");
+        const payload = await response.json();
+        const available = Boolean(payload.relayerConfigured
+          && Number(payload.relayChainId) === Number(config.chainId)
+          && payload.robotAddress);
+        if (!available) throw new Error("Relay is not configured for this network.");
         if (!cancelled) {
-          setPublicRelayAvailable(Boolean(payload.relayerConfigured && Number(payload.relayChainId) === Number(config.chainId)));
-          setRobotAddress(payload.robotAddress || "");
+          failures = 0;
+          setPublicRelayAvailable(true);
+          setRobotAddress(payload.robotAddress);
         }
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) {
           setPublicRelayAvailable(false);
-          setRobotAddress("");
+          const delay = COMPUTER_RETRY_DELAYS_MS[Math.min(failures, COMPUTER_RETRY_DELAYS_MS.length - 1)];
+          failures += 1;
+          retryTimer = window.setTimeout(checkRelay, delay);
         }
-      });
-    return () => { cancelled = true; };
+      }
+    }
+    void checkRelay();
+    return () => {
+      cancelled = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
+    };
   }, [config?.chainId, localServicesEnabled]);
 
   useEffect(() => {
@@ -221,6 +239,71 @@ function App() {
     const interval = window.setInterval(() => { refresh(); }, 3000);
     return () => window.clearInterval(interval);
   }, [activeMatch?.id, activeMatch?.status, account, game, pieceContract]);
+
+  useEffect(() => {
+    const isComputerTurn = Boolean(computerEnabled
+      && isComputerMatch
+      && isParticipant
+      && activeMatch?.status === 1
+      && activeMatch.currentPlayer.toLowerCase() === activeMatch.joiner.toLowerCase()
+      && !isTurnExpired);
+    const turnKey = isComputerTurn ? `${activeMatch.id}:${activeMatch.moveCount}` : "";
+    const previous = computerMoveRetry.current;
+
+    if (!isComputerTurn) {
+      if (previous.timer) window.clearTimeout(previous.timer);
+      computerMoveRetry.current = { key: "", inFlight: false, failures: 0, timer: null };
+      return undefined;
+    }
+
+    if (previous.key !== turnKey) {
+      if (previous.timer) window.clearTimeout(previous.timer);
+      computerMoveRetry.current = { key: turnKey, inFlight: false, failures: 0, timer: null };
+    }
+    const attempt = computerMoveRetry.current;
+    if (attempt.inFlight || attempt.timer) return undefined;
+
+    attempt.inFlight = true;
+    void (async () => {
+      try {
+        const result = await callComputer(
+          "move",
+          { matchId: activeMatch.id },
+          attempt.failures
+            ? `Retrying computer move (attempt ${attempt.failures + 1})…`
+            : "Computer is submitting its on-chain move…",
+          { refreshAfter: false }
+        );
+        if (computerMoveRetry.current.key !== turnKey) return;
+        if (!result?.skipped) {
+          showComputerMove(result, activeMatch);
+          setNotice("Computer move confirmed. Your turn.");
+        }
+        attempt.failures = 0;
+        await refresh();
+      } catch (error) {
+        if (computerMoveRetry.current.key !== turnKey) return;
+        attempt.failures += 1;
+        const delay = COMPUTER_RETRY_DELAYS_MS[Math.min(attempt.failures - 1, COMPUTER_RETRY_DELAYS_MS.length - 1)];
+        setNotice(`Computer move failed: ${displayError(error)} Retrying automatically in ${delay / 1000} seconds…`);
+        await refresh();
+        if (computerMoveRetry.current.key !== turnKey) return;
+        attempt.timer = window.setTimeout(() => {
+          if (computerMoveRetry.current.key !== turnKey) return;
+          computerMoveRetry.current.timer = null;
+          setComputerRetryVersion((version) => version + 1);
+        }, delay);
+      } finally {
+        if (computerMoveRetry.current.key === turnKey) attempt.inFlight = false;
+      }
+    })();
+    return undefined;
+  }, [activeMatch?.id, activeMatch?.moveCount, activeMatch?.status, activeMatch?.currentPlayer,
+    activeMatch?.deadline, computerEnabled, isComputerMatch, isParticipant, isTurnExpired, computerRetryVersion]);
+
+  useEffect(() => () => {
+    if (computerMoveRetry.current.timer) window.clearTimeout(computerMoveRetry.current.timer);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -351,7 +434,7 @@ function App() {
     }
   }
 
-  async function send(action, successMessage, afterSuccess) {
+  async function send(action, successMessage) {
     try {
       setPending(true);
       const signer = await provider.getSigner();
@@ -361,7 +444,6 @@ function App() {
       if (!receipt) throw new Error("Transaction confirmation timed out. Check the wallet activity and refresh the page.");
       setNotice(successMessage);
       await refresh();
-      if (afterSuccess) await afterSuccess();
     } catch (error) {
       setNotice(displayError(error));
     } finally {
@@ -393,7 +475,7 @@ function App() {
     );
   }
 
-  async function callLocalService(endpoint, body, statusMessage) {
+  async function callLocalService(endpoint, body, statusMessage, { refreshAfter = true } = {}) {
     setNotice(statusMessage);
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 15000);
@@ -406,7 +488,7 @@ function App() {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || "The local computer did not respond.");
-      await refresh();
+      if (refreshAfter) await refresh();
       return payload;
     } catch (error) {
       if (error.name === "AbortError") throw new Error("The local computer did not reply within 15 seconds. Confirm that npm run bot:local is running.");
@@ -416,15 +498,15 @@ function App() {
     }
   }
 
-  function callComputer(endpoint, body, statusMessage) {
+  function callComputer(endpoint, body, statusMessage, options) {
     if (localServicesEnabled) {
-      return callLocalService(endpoint, body, statusMessage || "Local computer is preparing its move…");
+      return callLocalService(endpoint, body, statusMessage || "Local computer is preparing its move…", options);
     }
-    return callRelayService(`computer/${endpoint}`, body, statusMessage || "Sepolia computer is preparing its move…");
+    return callRelayService(`computer/${endpoint}`, body, statusMessage || "Sepolia computer is preparing its move…", options);
   }
 
-  async function callRelayService(endpoint, body, statusMessage) {
-    if (localServicesEnabled) return callLocalService(`relay/${endpoint}`, body, statusMessage);
+  async function callRelayService(endpoint, body, statusMessage, { refreshAfter = true } = {}) {
+    if (localServicesEnabled) return callLocalService(`relay/${endpoint}`, body, statusMessage, { refreshAfter });
     if (!publicRelayAvailable || !RELAY_SERVICE_URL) throw new Error("The Sepolia fast-move relay is unavailable.");
     setNotice(statusMessage);
     const controller = new AbortController();
@@ -438,7 +520,7 @@ function App() {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.error || "The Sepolia fast-move relay did not respond.");
-      await refresh();
+      if (refreshAfter) await refresh();
       return payload;
     } catch (error) {
       if (error.name === "AbortError") throw new Error("The Sepolia fast-move relay timed out.");
@@ -500,13 +582,9 @@ function App() {
         signatureDeadline: String(signatureDeadline),
         signature
       }, "Submitting your fast move…");
-      if (isComputerMatch) {
-        const computerMove = await callComputer("move", { matchId: activeMatch.id }, "Computer is submitting its on-chain move…");
-        showComputerMove(computerMove);
-        setNotice("Computer move confirmed. Your turn.");
-      } else {
-        setNotice("Move confirmed. The opponent board will update automatically.");
-      }
+      setNotice(isComputerMatch
+        ? "Move confirmed. The computer will move automatically."
+        : "Move confirmed. The opponent board will update automatically.");
     } catch (error) {
       setNotice(displayError(error));
     } finally {
@@ -598,10 +676,10 @@ function App() {
     return send((signer) => game.connect(signer).joinMatch(matchId, selectedPiece), "Match joined. Black moves first.");
   }
 
-  function showComputerMove(result) {
-    if (result?.skipped || !activeMatch) return;
+  function showComputerMove(result, match = activeMatch) {
+    if (result?.skipped || !match) return;
     const index = Number(result?.index);
-    const cellCount = activeMatch.boardSize * activeMatch.boardSize;
+    const cellCount = match.boardSize * match.boardSize;
     if (!Number.isInteger(index) || index < 0 || index >= cellCount) return;
     setBoard((currentBoard) => {
       if (currentBoard.length !== cellCount) return currentBoard;
@@ -618,12 +696,7 @@ function App() {
     if (hasFastSession) return playFastMove(index, x, y);
     return send(
       (signer) => game.connect(signer).playMove(activeMatch.id, x, y),
-      "Move confirmed.",
-      isComputerMatch ? async () => {
-        const computerMove = await callComputer("move", { matchId: activeMatch.id }, "Computer is submitting its on-chain move…");
-        showComputerMove(computerMove);
-        setNotice("Computer move confirmed. Your turn.");
-      } : undefined
+      isComputerMatch ? "Move confirmed. The computer will move automatically." : "Move confirmed."
     );
   }
 
