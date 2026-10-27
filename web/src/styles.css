@@ -6,6 +6,7 @@ button { border: 0; border-radius: 8px; padding: .7rem 1rem; background: #e8ad3a
 button:disabled { cursor: not-allowed; opacity: .5; }
 main { width: min(1120px, calc(100% - 2rem)); margin: 0 auto; padding: 2rem 0 4rem; }
 header, .section-title { display: flex; justify-content: space-between; gap: 1rem; align-items: center; }
+.wallet-controls { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .6rem; }
 h1, h2, p { margin-top: 0; } h1 { font-size: clamp(2rem, 6vw, 3.5rem); margin-bottom: 0; }
 h2 { margin-bottom: .75rem; } .eyebrow { color: #e8ad3a; font-size: .75rem; font-weight: 800; letter-spacing: .12em; margin-bottom: .25rem; }
 .notice, .warning, .network-note { padding: .75rem 1rem; border-radius: 8px; background: #27231d; margin: 1.5rem 0; }

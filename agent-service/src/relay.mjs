@@ -11,6 +11,7 @@ import {
   verifyMessage
 } from "ethers";
 import { rankCandidateMoves } from "./game.mjs";
+import { relayNetworkConfig } from "./relayConfig.mjs";
 
 const GAME_ABI = [
   "function activateSessionKey(address player, address sessionKey, uint64 expiresAt, uint256 nonce, bytes signature)",
@@ -140,7 +141,7 @@ export function validateComputerMove(body) {
 
 function computerMetadataURI() {
   const metadata = {
-    name: "Sepolia Computer",
+    name: "Gobang Computer",
     description: "The on-chain computer opponent operated by the Gobang relay.",
     attributes: [
       { trait_type: "Role", value: "Computer" },
@@ -152,14 +153,14 @@ function computerMetadataURI() {
 }
 
 export function createSepoliaRelayer({
-  rpcUrl = process.env.SEPOLIA_RPC_URL,
+  rpcUrl = relayNetworkConfig().rpcUrl,
   privateKey = process.env.RELAYER_PRIVATE_KEY,
   gameManagerAddress = process.env.GAME_MANAGER_ADDRESS,
-  chainId = Number(process.env.RELAY_CHAIN_ID || 11155111),
+  chainId = relayNetworkConfig().chainId,
   computerPieceId = process.env.ROBOT_PIECE_ID || ""
 } = {}) {
-  if (!rpcUrl) throw new Error("The Sepolia relay is not configured.");
-  if (!privateKey) throw new Error("The Sepolia relay is not configured.");
+  if (!rpcUrl) throw new Error("The transaction relay is not configured.");
+  if (!privateKey) throw new Error("The transaction relay is not configured.");
   const contractAddress = addressValue(gameManagerAddress, "GAME_MANAGER_ADDRESS");
   const provider = new JsonRpcProvider(rpcUrl, chainId, { staticNetwork: true });
   const wallet = new Wallet(privateKey, provider);
@@ -180,7 +181,7 @@ export function createSepoliaRelayer({
       return { pieceId: configuredComputerPieceId, transactionHash: null };
     }
 
-    const transaction = await piece.mint("Sepolia Computer", computerMetadataURI());
+    const transaction = await piece.mint("Gobang Computer", computerMetadataURI());
     const receipt = await transaction.wait(1);
     const created = receipt.logs.map((log) => {
       try { return piece.interface.parseLog(log); } catch { return null; }
@@ -279,7 +280,7 @@ export function createSepoliaRelayer({
         return { skipped: true, reason: "The match is no longer active." };
       }
       if (match.joiner.toLowerCase() !== robotAddress.toLowerCase()) {
-        throw new Error("This match does not belong to the Sepolia computer.");
+        throw new Error("This match does not belong to the relay computer.");
       }
       if (match.currentPlayer.toLowerCase() !== robotAddress.toLowerCase()) {
         return { skipped: true, reason: "It is not the computer's turn." };

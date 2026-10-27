@@ -1,7 +1,9 @@
 {
-  "chainId": 11155111,
+  "chainId": 84532,
   "deployer": "0x3Fbd3646FeC34390418acEC64366F2093A01C4f7",
-  "deploymentBlock": 11933564,
+  "deploymentBlock": 50962294,
   "chessPieceNFT": "0x037eB04D95165F3642cF62049732D757AeF6cA2F",
-  "gameManager": "0x42B9B91bbFaA6c48A91592B0730722DAc05f1Fd1"
+  "gameManager": "0x42B9B91bbFaA6c48A91592B0730722DAc05f1Fd1",
+  "robotAddress": "0xeF5bD51593421079975d76C614eA8F00E42F1535",
+  "computerPieceId": "1"
 }

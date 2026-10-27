@@ -39,7 +39,8 @@ class RecommendationWalletProvider extends WalletProvider {
   }
 
   getNetwork() {
-    return { protocolFamily: "evm", networkId: "ethereum-sepolia", chainId: "11155111" };
+    const chainId = process.env.RELAY_CHAIN_ID || "84532";
+    return { protocolFamily: "evm", networkId: chainId === "11155111" ? "ethereum-sepolia" : "base-sepolia", chainId };
   }
 
   getName() {

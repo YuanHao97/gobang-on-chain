@@ -4,9 +4,11 @@ Create a chess piece, mint it as an NFT, and take that identity into a fully on-
 
 Gobang On-Chain is a wallet-based, 15x15 five-in-a-row game built for EVM networks. Each player owns a cosmetic chess-piece NFT, chooses one when entering a match, and plays against another wallet while the smart contracts enforce turns, deadlines, legal moves, wins, resignations, and timeouts.
 
-**[Play the live Ethereum Sepolia demo](https://yuanhao97.github.io/gobang-on-chain/)**
+**[Play the live Base Sepolia / Ethereum Sepolia demo](https://yuanhao97.github.io/gobang-on-chain/)**
 
-The live demo uses Ethereum Sepolia test ETH only. Do not send mainnet ETH to the game.
+The live demo supports Base Sepolia and Ethereum Sepolia test ETH. Use the network button
+to switch; each network has its own NFTs, matches, and leaderboard. New visitors start on
+Base Sepolia. Do not send mainnet ETH to the game.
 
 ## What You Can Do
 
@@ -47,22 +49,25 @@ The lobby reads `nextMatchId` and `getMatch` directly, and chess-piece inventory
 
 ## Game Modes
 
-### Sepolia Multiplayer and Computer Match
+### Base Sepolia and Ethereum Sepolia Multiplayer and Computer Match
 
-The public demo runs against Ethereum Sepolia. Minting and creating or joining matches are testnet transactions, so a connected wallet needs Sepolia test ETH. The public relay supports short-lived fast-move sessions and also acts as the white-stone computer account in single-player matches. The computer mints its own chess-piece NFT, joins the match, and submits every move as a real Sepolia transaction.
+The public demo supports Base Sepolia and Ethereum Sepolia. Minting and creating or joining matches are testnet transactions, so a connected wallet needs test ETH on the selected network. The public relay supports short-lived fast-move sessions and also acts as the white-stone computer account in single-player matches. The computer mints its own chess-piece NFT, joins the match, and submits every move as a real transaction on that network.
 
 ### Local Multiplayer and Computer Match
 
 The Hardhat setup supports two local wallet accounts playing against each other and a single-player mode against a local computer account. Local matches can automatically request a one-time, two-hour fast-move session; after authorization, moves use a temporary browser session key and the local relay instead of opening MetaMask for every turn.
 
-## Sepolia Contracts
+## Public Testnet Contracts
 
-| Contract | Address |
-| --- | --- |
-| `ChessPieceNFT` | [`0x037eB04D95165F3642cF62049732D757AeF6cA2F`](https://sepolia.etherscan.io/address/0x037eB04D95165F3642cF62049732D757AeF6cA2F) |
-| `GameManager` | [`0x42B9B91bbFaA6c48A91592B0730722DAc05f1Fd1`](https://sepolia.etherscan.io/address/0x42B9B91bbFaA6c48A91592B0730722DAc05f1Fd1) |
+| Network | Contract | Address |
+| --- | --- | --- |
+| Base Sepolia | `ChessPieceNFT` | [`0x037eB04D95165F3642cF62049732D757AeF6cA2F`](https://sepolia.basescan.org/address/0x037eB04D95165F3642cF62049732D757AeF6cA2F) |
+| Base Sepolia | `GameManager` | [`0x42B9B91bbFaA6c48A91592B0730722DAc05f1Fd1`](https://sepolia.basescan.org/address/0x42B9B91bbFaA6c48A91592B0730722DAc05f1Fd1) |
+| Ethereum Sepolia | `ChessPieceNFT` | [`0x037eB04D95165F3642cF62049732D757AeF6cA2F`](https://sepolia.etherscan.io/address/0x037eB04D95165F3642cF62049732D757AeF6cA2F) |
+| Ethereum Sepolia | `GameManager` | [`0x42B9B91bbFaA6c48A91592B0730722DAc05f1Fd1`](https://sepolia.etherscan.io/address/0x42B9B91bbFaA6c48A91592B0730722DAc05f1Fd1) |
 
-Network: **Ethereum Sepolia**, chain ID `11155111`.
+Chain IDs: **Base Sepolia `84532`**, **Ethereum Sepolia `11155111`**. The addresses
+coincide across the two chains, but their contracts, balances, and game state are independent.
 
 ## Technology
 
@@ -185,6 +190,59 @@ Use a separate test-only relay wallet with a small Sepolia ETH balance. Never us
 During first-time setup, leave `ROBOT_PIECE_ID` empty, deploy once, and call `POST /relay/computer/prepare` from an allowed origin. Save the returned `computerPieceId` as `ROBOT_PIECE_ID` in the hosting environment and redeploy. Later instances verify that fixed NFT belongs to the relay account instead of scanning historical logs.
 
 Minting, creating a match, and joining a match still use normal wallet transactions because the currently deployed contracts authorize those operations with `msg.sender`. Removing those confirmations requires a new contract deployment with scoped meta-transactions or a smart-account/session-key design.
+
+## Deploy to Base Sepolia
+
+Base Sepolia uses chain ID `84532`, RPC `https://sepolia.base.org`, and explorer `https://sepolia.basescan.org`.
+Fund the deployer with Base Sepolia test ETH. Set `BASE_SEPOLIA_RPC_URL` and optionally
+`BASE_SEPOLIA_PRIVATE_KEY` in `.env`; if the key is omitted, deployment reuses the dedicated
+test wallet in `SEPOLIA_PRIVATE_KEY`.
+
+```bash
+npm run deploy:base-sepolia
+npm --prefix web run build
+```
+
+Deployment writes `deployments/baseSepolia.json` and `web/public/deployments/baseSepolia.json`.
+The page's network button switches between Ethereum Sepolia and Base Sepolia and asks
+MetaMask to switch with it (adding the network if needed). The selected network is remembered
+in this browser. The original Ethereum deployment remains in `web/public/deployments/sepolia.json`.
+Both contracts must be deployed on the new network. Existing Ethereum Sepolia NFTs, games,
+and leaderboard entries remain accessible by switching back to Ethereum Sepolia.
+
+For the hosted relay and computer opponent, fund its separate wallet on Base Sepolia and
+update the hosting environment before publishing the frontend:
+
+```text
+BASE_SEPOLIA_RPC_URL=https://sepolia.base.org
+BASE_SEPOLIA_GAME_MANAGER_ADDRESS=the_new_base_sepolia_game_manager_address
+BASE_SEPOLIA_ROBOT_PIECE_ID=
+```
+
+Keep the original `SEPOLIA_RPC_URL`, `GAME_MANAGER_ADDRESS`, `ROBOT_PIECE_ID`,
+`RELAY_CHAIN_ID=11155111`, `RELAYER_PRIVATE_KEY`, and allowed origins so existing clients
+continue to work. Both networks may share the dedicated test relay key; optionally set
+`BASE_SEPOLIA_RELAYER_PRIVATE_KEY` to use a separate Base wallet. Fund the chosen wallet
+on each chain it serves.
+
+Redeploy, call `POST /relay/computer/prepare` with JSON body `{"chainId":84532}`, then save
+the returned piece ID as `BASE_SEPOLIA_ROBOT_PIECE_ID` and redeploy again. Do not reuse the
+Ethereum computer NFT ID on Base. The backend routes requests by the body's `chainId`;
+old clients without that field still use `RELAY_CHAIN_ID`. Health checks accept the query
+`/health?chainId=84532`, and the frontend validates both chain and game-contract address.
+
+Alternatively, initialize the computer NFT from the deployer without downloading the hosted
+relay key: run `COMPUTER_ADDRESS=the_relay_wallet_address npx hardhat run scripts/prepareComputer.js --network baseSepolia`.
+This mints a piece, transfers it to the relay wallet, verifies ownership, and saves the piece
+ID to the deployment files. Set that ID as `BASE_SEPOLIA_ROBOT_PIECE_ID` before deploying the
+backend. Re-running the script verifies the saved piece instead of minting another one.
+
+Sessions, computer-match IDs, and retries are isolated by chain and contract. Rejecting a
+MetaMask network-switch request leaves the current game network selected. Until Base
+contracts are deployed, choosing Base displays a pending-deployment notice.
+
+To change the default network for new visitors, run `npm run use:base-sepolia` or
+`npm run use:sepolia`. These commands preserve the other network's deployment file.
 
 ## Deploy to Ethereum Sepolia
 

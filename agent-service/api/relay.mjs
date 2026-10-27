@@ -1,9 +1,10 @@
 import { applyVercelCors, isAllowedOrigin, parseAllowedOrigins } from "../src/cors.mjs";
 import { createSepoliaRelayer } from "../src/relay.mjs";
+import { relayOptionsForChain } from "../src/relayConfig.mjs";
 
 const MAX_BODY_BYTES = 16 * 1024;
 const DEFAULT_REQUESTS_PER_MINUTE = 30;
-let relayerPromise;
+const relayerPromises = new Map();
 let transactionQueue = Promise.resolve();
 const clients = new Map();
 
@@ -44,9 +45,18 @@ function enqueue(action) {
   return result;
 }
 
-async function configuredRelayer() {
-  relayerPromise ||= Promise.resolve().then(() => createSepoliaRelayer());
-  return relayerPromise;
+async function configuredRelayer(chainId) {
+  const options = relayOptionsForChain(chainId);
+  if (!options.rpcUrl || !options.gameManagerAddress || !options.privateKey) {
+    throw new Error("The relay is not configured for this network.");
+  }
+  if (!relayerPromises.has(options.chainId)) {
+    relayerPromises.set(options.chainId, Promise.resolve().then(() => createSepoliaRelayer(options)).catch((error) => {
+      relayerPromises.delete(options.chainId);
+      throw error;
+    }));
+  }
+  return relayerPromises.get(options.chainId);
 }
 
 export function createVercelRelayHandler({ getRelayer = configuredRelayer } = {}) {
@@ -74,7 +84,7 @@ export function createVercelRelayHandler({ getRelayer = configuredRelayer } = {}
       }
       const body = requestBody(request);
       const result = await enqueue(async () => {
-        const relayer = await getRelayer();
+        const relayer = await getRelayer(body.chainId);
         return relayer[operation](body);
       });
       return response.status(200).json(result);

@@ -52,13 +52,13 @@ test("validates bounded relay payloads", () => {
   assert.throws(() => validateMove({ ...input.move, x: 15 }), /0 to 14/);
 });
 
-test("requires a match-creator signature before the computer joins", async () => {
+for (const chainId of [11155111, 84532]) test(`requires a match-creator signature on chain ${chainId}`, async () => {
   const player = Wallet.createRandom();
   const gameManager = Wallet.createRandom().address;
   const authorizationDeadline = Math.floor(Date.now() / 1000) + 120;
   const authorization = computerJoinAuthorization(
     gameManager,
-    11155111,
+    chainId,
     7,
     player.address,
     authorizationDeadline
@@ -69,7 +69,7 @@ test("requires a match-creator signature before the computer joins", async () =>
     player: player.address,
     authorizationDeadline: String(authorizationDeadline),
     signature
-  }, { contractAddress: gameManager, chainId: 11155111 });
+  }, { contractAddress: gameManager, chainId });
 
   assert.equal(input.matchId, 7n);
   assert.equal(input.player, player.address);
@@ -78,7 +78,13 @@ test("requires a match-creator signature before the computer joins", async () =>
     player: player.address,
     authorizationDeadline: String(authorizationDeadline),
     signature
-  }, { contractAddress: gameManager, chainId: 11155111 }), /signature is invalid/);
+  }, { contractAddress: gameManager, chainId }), /signature is invalid/);
+  assert.throws(() => validateComputerJoin({
+    matchId: "7",
+    player: player.address,
+    authorizationDeadline: String(authorizationDeadline),
+    signature
+  }, { contractAddress: gameManager, chainId: chainId === 84532 ? 11155111 : 84532 }), /signature is invalid/);
   assert.equal(validateComputerMove({ matchId: "9" }).matchId, 9n);
 });
 
@@ -121,6 +127,23 @@ test("routes computer operations through the transaction queue", async () => {
   assert.equal(response.statusCode, 200);
   assert.equal(response.payload.transactionHash, "0xabcd");
   assert.equal(response.payload.matchId, "4");
+});
+
+test("routes Base requests to the Base relay and keeps old clients without a chain ID compatible", async () => {
+  const requestedChains = [];
+  const handler = createVercelRelayHandler({
+    getRelayer: async (chainId) => {
+      requestedChains.push(chainId);
+      return { computerMove: async () => ({ transactionHash: "0xabcd" }) };
+    }
+  });
+  for (const body of [{ chainId: 84532, matchId: "1" }, { matchId: "2" }]) {
+    const response = mockResponse();
+    await handler({ method: "POST", query: { operation: "computerMove" },
+      headers: { origin: "https://yuanhao97.github.io", "x-forwarded-for": "multi-chain-test" }, body }, response);
+    assert.equal(response.statusCode, 200);
+  }
+  assert.deepEqual(requestedChains, [84532, undefined]);
 });
 
 test("allows the relay to prepare its reusable computer piece", async () => {

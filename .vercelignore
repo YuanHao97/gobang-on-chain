@@ -1,0 +1,10 @@
+.git
+.env*
+**/.env*
+.vercel
+**/.vercel
+node_modules
+**/node_modules
+artifacts
+cache
+web/dist

@@ -57,6 +57,35 @@ test("serves Vercel recommendation responses with approved CORS", async () => {
   assert.equal(response.headers["Access-Control-Allow-Origin"], "https://yuanhao97.github.io");
 });
 
+test("reports Base relay configuration separately from the legacy Ethereum deployment", () => {
+  const values = {
+    RELAY_CHAIN_ID: "11155111",
+    SEPOLIA_RPC_URL: "https://ethereum.example",
+    GAME_MANAGER_ADDRESS: "0x42B9B91bbFaA6c48A91592B0730722DAc05f1Fd1",
+    RELAYER_PRIVATE_KEY: "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
+    BASE_SEPOLIA_RPC_URL: "https://sepolia.base.org",
+    BASE_SEPOLIA_GAME_MANAGER_ADDRESS: "0x1111111111111111111111111111111111111111"
+  };
+  const previous = Object.fromEntries(Object.keys(values).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, values);
+  try {
+    for (const [chainId, contract] of [[84532, values.BASE_SEPOLIA_GAME_MANAGER_ADDRESS], [11155111, values.GAME_MANAGER_ADDRESS]]) {
+      const response = mockResponse();
+      healthHandler({ method: "GET", headers: { origin: "https://yuanhao97.github.io" }, query: { chainId } }, response);
+      assert.equal(response.payload.relayerConfigured, true);
+      assert.equal(response.payload.relayChainId, chainId);
+      assert.equal(response.payload.gameManagerAddress, contract);
+    }
+    const response = mockResponse();
+    healthHandler({ method: "GET", headers: { origin: "https://yuanhao97.github.io" }, query: { chainId: 1 } }, response);
+    assert.equal(response.statusCode, 400);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
+
 test("rejects unapproved Vercel browser origins", async () => {
   const handler = createVercelRecommendationHandler({
     recommend: async () => ({}),

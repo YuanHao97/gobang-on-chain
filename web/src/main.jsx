@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserProvider, Contract, getBytes, id, solidityPackedKeccak256, Wallet } from "ethers";
 import { chessPieceAbi, gameManagerAbi } from "./contracts";
 import { loadMatchHistory, loadOwnedPieces } from "./gameData";
+import { loadNetworkDeployment, PUBLIC_NETWORKS, switchWalletNetwork } from "./networks";
 import { buildVictoryLeaderboard } from "./leaderboard";
 import { BLACK_FALLBACK_SKIN, PALETTES, skinFromMetadataURI, WHITE_FALLBACK_SKIN } from "./pieceSkin";
 import "./styles.css";
@@ -93,6 +94,8 @@ function displayError(error) {
 
 function App() {
   const [config, setConfig] = useState(null);
+  const [switchingNetwork, setSwitchingNetwork] = useState(false);
+  const networkTransition = useRef(false);
   const [provider, setProvider] = useState(null);
   const [account, setAccount] = useState("");
   const [pieces, setPieces] = useState([]);
@@ -102,6 +105,7 @@ function App() {
   const [piecesLoading, setPiecesLoading] = useState(false);
   const [piecesError, setPiecesError] = useState("");
   const refreshVersion = useRef(0);
+  const boardVersion = useRef(0);
   const [selectedPiece, setSelectedPiece] = useState("");
   const [selectedMatch, setSelectedMatch] = useState("");
   const [board, setBoard] = useState([]);
@@ -122,6 +126,11 @@ function App() {
   const [robotAddress, setRobotAddress] = useState("");
 
   const contractsReady = Boolean(config?.chessPieceNFT && config?.gameManager);
+  const networkName = PUBLIC_NETWORKS[config?.chainId]?.name
+    || (Number(config?.chainId) === 31337 ? "Hardhat Local" : "the configured network");
+  const explorerUrl = PUBLIC_NETWORKS[config?.chainId]?.explorerUrl || "";
+  const networkScope = `${config?.chainId}-${config?.gameManager}`;
+  const otherChainId = Number(config?.chainId) === 84532 ? 11155111 : 84532;
   const game = useMemo(
     () => provider && contractsReady ? new Contract(config.gameManager, gameManagerAbi, provider) : null,
     [provider, config, contractsReady]
@@ -151,21 +160,33 @@ function App() {
     && fastSession.expiresAt > Math.floor(Date.now() / 1000));
 
   useEffect(() => {
+    let cancelled = false;
     fetch(`${import.meta.env.BASE_URL}contracts.json`, { cache: "no-store" })
-      .then((response) => response.json())
-      .then(setConfig)
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Deployment unavailable.");
+        const defaultConfig = await response.json();
+        let savedChain;
+        try { savedChain = localStorage.getItem("gobang-network"); } catch { /* Storage may be disabled. */ }
+        if (Number(defaultConfig.chainId) !== 31337 && PUBLIC_NETWORKS[savedChain]) {
+          try { return await loadNetworkDeployment(savedChain, import.meta.env.BASE_URL); } catch { /* Use default deployment. */ }
+        }
+        return defaultConfig;
+      })
+      .then((deployment) => { if (!cancelled) setConfig(deployment); })
       .catch(() => setNotice("Unable to load deployment configuration."));
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
-    if (!config?.gameManager) return;
+    if (!config?.gameManager) { setComputerMatchIds([]); return; }
     try {
-      const savedIds = JSON.parse(localStorage.getItem(`gobang-computer-matches-${config.gameManager}`) || "[]");
+      const savedIds = JSON.parse(localStorage.getItem(`gobang-computer-matches-${networkScope}`)
+        || (Number(config.chainId) !== 84532 && localStorage.getItem(`gobang-computer-matches-${config.gameManager}`)) || "[]");
       setComputerMatchIds(Array.isArray(savedIds) ? savedIds.map(String) : []);
     } catch {
       setComputerMatchIds([]);
     }
-  }, [config?.gameManager]);
+  }, [networkScope]);
 
   useEffect(() => {
     if (!config?.gameManager || !account || !relayEnabled) {
@@ -173,7 +194,7 @@ function App() {
       return;
     }
     try {
-      const key = `gobang-fast-session-${config.gameManager}-${account.toLowerCase()}`;
+      const key = `gobang-fast-session-${networkScope}-${account.toLowerCase()}`;
       const savedSession = JSON.parse(sessionStorage.getItem(key) || "null");
       setFastSession(savedSession?.expiresAt > Math.floor(Date.now() / 1000)
         ? { ...savedSession, player: account.toLowerCase() }
@@ -181,7 +202,7 @@ function App() {
     } catch {
       setFastSession(null);
     }
-  }, [config?.gameManager, account, relayEnabled]);
+  }, [networkScope, account, relayEnabled]);
 
   useEffect(() => {
     if (!config?.chainId || localServicesEnabled || !RELAY_SERVICE_URL) {
@@ -194,11 +215,12 @@ function App() {
     let failures = 0;
     async function checkRelay() {
       try {
-        const response = await fetch(`${RELAY_SERVICE_URL}/health`, { cache: "no-store" });
+        const response = await fetch(`${RELAY_SERVICE_URL}/health?chainId=${config.chainId}`, { cache: "no-store" });
         if (!response.ok) throw new Error("Relay health check failed.");
         const payload = await response.json();
         const available = Boolean(payload.relayerConfigured
           && Number(payload.relayChainId) === Number(config.chainId)
+          && (!payload.gameManagerAddress || payload.gameManagerAddress.toLowerCase() === config.gameManager?.toLowerCase())
           && payload.robotAddress);
         if (!available) throw new Error("Relay is not configured for this network.");
         if (!cancelled) {
@@ -220,7 +242,7 @@ function App() {
       cancelled = true;
       if (retryTimer) window.clearTimeout(retryTimer);
     };
-  }, [config?.chainId, localServicesEnabled]);
+  }, [config?.chainId, config?.gameManager, localServicesEnabled]);
 
   useEffect(() => {
     setPieceName((currentName) => currentName || pieceDesign.name);
@@ -249,7 +271,7 @@ function App() {
       && activeMatch?.status === 1
       && activeMatch.currentPlayer.toLowerCase() === activeMatch.joiner.toLowerCase()
       && !isTurnExpired);
-    const turnKey = isComputerTurn ? `${activeMatch.id}:${activeMatch.moveCount}` : "";
+    const turnKey = isComputerTurn ? `${networkScope}:${activeMatch.id}:${activeMatch.moveCount}` : "";
     const previous = computerMoveRetry.current;
 
     if (!isComputerTurn) {
@@ -301,7 +323,7 @@ function App() {
     })();
     return undefined;
   }, [activeMatch?.id, activeMatch?.moveCount, activeMatch?.status, activeMatch?.currentPlayer,
-    activeMatch?.deadline, computerEnabled, isComputerMatch, isParticipant, isTurnExpired, computerRetryVersion]);
+    activeMatch?.deadline, computerEnabled, isComputerMatch, isParticipant, isTurnExpired, computerRetryVersion, networkScope]);
 
   useEffect(() => () => {
     if (computerMoveRetry.current.timer) window.clearTimeout(computerMoveRetry.current.timer);
@@ -336,11 +358,11 @@ function App() {
   useEffect(() => {
     if (!relayEnabled || !activeMatch || activeMatch.status !== 1 || !isParticipant || hasFastSession
       || !game || !provider || !account) return;
-    const attemptKey = `${config.gameManager}-${account.toLowerCase()}-${activeMatch.id}`;
+    const attemptKey = `${networkScope}-${account.toLowerCase()}-${activeMatch.id}`;
     if (fastSessionAttempts.current.has(attemptKey)) return;
     fastSessionAttempts.current.add(attemptKey);
     void enableFastMoves();
-  }, [activeMatch?.id, activeMatch?.status, isParticipant, hasFastSession, game, provider, account, config?.gameManager, relayEnabled]);
+  }, [activeMatch?.id, activeMatch?.status, isParticipant, hasFastSession, game, provider, account, networkScope, relayEnabled]);
 
   useEffect(() => {
     if (!window.ethereum?.on) return undefined;
@@ -353,22 +375,108 @@ function App() {
     return () => window.ethereum.removeListener?.("accountsChanged", handleAccountsChanged);
   }, []);
 
+  function clearNetworkState() {
+    refreshVersion.current += 1;
+    boardVersion.current += 1;
+    if (computerMoveRetry.current.timer) window.clearTimeout(computerMoveRetry.current.timer);
+    computerMoveRetry.current = { key: "", inFlight: false, failures: 0, timer: null };
+    setPieces([]);
+    setMatches([]);
+    setSelectedPiece("");
+    setSelectedMatch("");
+    setBoard([]);
+    setMatchesLoading(false);
+    setPiecesLoading(false);
+    setMatchesError("");
+    setPiecesError("");
+    setFastSession(null);
+    setAiRecommendation(null);
+    setPublicRelayAvailable(false);
+    setRobotAddress("");
+    setComputerMatchIds([]);
+  }
+
+  useEffect(() => {
+    if (!window.ethereum?.on) return undefined;
+    const handleChainChanged = (chainId) => {
+      if (networkTransition.current || Number(chainId) === Number(config?.chainId)) return;
+      clearNetworkState();
+      setProvider(null);
+      setAccount("");
+      setNotice(`Wallet network changed. Select a network on this page, or reconnect to ${networkName}.`);
+    };
+    window.ethereum.on("chainChanged", handleChainChanged);
+    return () => window.ethereum.removeListener?.("chainChanged", handleChainChanged);
+  }, [config?.chainId]);
+
+  async function changeNetwork(chainId) {
+    if (networkTransition.current || pending || aiPending || computerMoveRetry.current.inFlight) return;
+    networkTransition.current = true;
+    setSwitchingNetwork(true);
+    setPending(true);
+    try {
+      const deployment = await loadNetworkDeployment(chainId, import.meta.env.BASE_URL);
+      let nextProvider = null;
+      let nextAccount = "";
+      if (window.ethereum && account) {
+        await switchWalletNetwork(window.ethereum, chainId);
+        nextProvider = new BrowserProvider(window.ethereum);
+        if (Number((await nextProvider.getNetwork()).chainId) !== Number(chainId)) {
+          throw new Error("Wallet network switch was not completed.");
+        }
+        nextAccount = (await nextProvider.send("eth_accounts", []))[0] || "";
+      }
+      clearNetworkState();
+      setConfig(deployment);
+      setProvider(nextProvider);
+      setAccount(nextAccount);
+      try { localStorage.setItem("gobang-network", String(chainId)); } catch { /* Storage may be disabled. */ }
+      setNotice(deployment.gameManager
+        ? `Switched to ${PUBLIC_NETWORKS[chainId].name}. Each network has its own pieces and matches.`
+        : `${PUBLIC_NETWORKS[chainId].name} is awaiting contract deployment. Ethereum Sepolia remains available.`);
+    } catch (error) {
+      // If MetaMask switched but a later step failed, disconnect stale contracts.
+      if (window.ethereum && account) {
+        try {
+          const walletChainId = await window.ethereum.request({ method: "eth_chainId" });
+          if (Number(walletChainId) !== Number(config.chainId)) {
+            clearNetworkState();
+            setProvider(null);
+            setAccount("");
+          }
+        } catch { /* The user can reconnect once the wallet is available. */ }
+      }
+      setNotice(displayError(error));
+    } finally {
+      networkTransition.current = false;
+      setSwitchingNetwork(false);
+      setPending(false);
+    }
+  }
+
   async function connectWallet() {
+    if (networkTransition.current) return;
+    networkTransition.current = true;
+    setPending(true);
     try {
       if (!window.ethereum) throw new Error("Install MetaMask or another injected EVM wallet first.");
       if (!contractsReady) throw new Error("Contracts have not been deployed for the selected network.");
-      const nextProvider = new BrowserProvider(window.ethereum);
       // Requesting the eth_accounts permission makes MetaMask show its account selector,
       // including when this site has already been connected before.
       await window.ethereum.request({
         method: "wallet_requestPermissions",
         params: [{ eth_accounts: {} }]
       });
-      const accounts = await nextProvider.send("eth_requestAccounts", []);
+      const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
       if (!accounts[0]) throw new Error("Choose an account in MetaMask to continue.");
+      if (PUBLIC_NETWORKS[config.chainId]) {
+        networkTransition.current = true;
+        await switchWalletNetwork(window.ethereum, config.chainId);
+      }
+      const nextProvider = new BrowserProvider(window.ethereum);
       const network = await nextProvider.getNetwork();
       if (Number(network.chainId) !== config.chainId) {
-        throw new Error(`Switch your wallet to chain ID ${config.chainId}.`);
+        throw new Error(`Switch your wallet to ${networkName} (chain ID ${config.chainId}).`);
       }
       setProvider(nextProvider);
       setAccount(accounts[0]);
@@ -379,6 +487,9 @@ function App() {
       }
     } catch (error) {
       setNotice(displayError(error));
+    } finally {
+      networkTransition.current = false;
+      setPending(false);
     }
   }
 
@@ -420,15 +531,16 @@ function App() {
   }
 
   async function loadBoard(match) {
+    const version = ++boardVersion.current;
     try {
       const cells = await Promise.all(Array.from({ length: match.boardSize * match.boardSize }, async (_, index) => {
         const x = index % match.boardSize;
         const y = Math.floor(index / match.boardSize);
         return Number(await game.getCell(match.id, x, y));
       }));
-      setBoard(cells);
+      if (boardVersion.current === version) setBoard(cells);
     } catch (error) {
-      setNotice(`Board load failed: ${displayError(error)}`);
+      if (boardVersion.current === version) setNotice(`Board load failed: ${displayError(error)}`);
     }
   }
 
@@ -500,12 +612,12 @@ function App() {
     if (localServicesEnabled) {
       return callLocalService(endpoint, body, statusMessage || "Local computer is preparing its move…", options);
     }
-    return callRelayService(`computer/${endpoint}`, body, statusMessage || "Sepolia computer is preparing its move…", options);
+    return callRelayService(`computer/${endpoint}`, body, statusMessage || "The computer is preparing its move…", options);
   }
 
   async function callRelayService(endpoint, body, statusMessage, { refreshAfter = true } = {}) {
     if (localServicesEnabled) return callLocalService(`relay/${endpoint}`, body, statusMessage, { refreshAfter });
-    if (!publicRelayAvailable || !RELAY_SERVICE_URL) throw new Error("The Sepolia fast-move relay is unavailable.");
+    if (!publicRelayAvailable || !RELAY_SERVICE_URL) throw new Error("The fast-move relay is unavailable.");
     setNotice(statusMessage);
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 60000);
@@ -513,15 +625,15 @@ function App() {
       const response = await fetch(`${RELAY_SERVICE_URL}/relay/${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...body, chainId: config.chainId }),
         signal: controller.signal
       });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(payload.error || "The Sepolia fast-move relay did not respond.");
+      if (!response.ok) throw new Error(payload.error || "The fast-move relay did not respond.");
       if (refreshAfter) await refresh();
       return payload;
     } catch (error) {
-      if (error.name === "AbortError") throw new Error("The Sepolia fast-move relay timed out.");
+      if (error.name === "AbortError") throw new Error("The fast-move relay timed out.");
       throw error;
     } finally {
       window.clearTimeout(timeout);
@@ -551,7 +663,7 @@ function App() {
         signature
       }, "Activating fast moves on the local relay…");
       const session = { privateKey: sessionWallet.privateKey, expiresAt, player: account.toLowerCase() };
-      sessionStorage.setItem(`gobang-fast-session-${config.gameManager}-${account.toLowerCase()}`, JSON.stringify(session));
+      sessionStorage.setItem(`gobang-fast-session-${networkScope}-${account.toLowerCase()}`, JSON.stringify(session));
       setFastSession(session);
       setNotice("Fast moves enabled. Your future moves will not open MetaMask.");
     } catch (error) {
@@ -606,7 +718,7 @@ function App() {
           BigInt(authorizationDeadline)
         ]
       );
-      setNotice("Approve the one-time invitation for the Sepolia computer…");
+      setNotice("Approve the one-time invitation for the on-chain computer…");
       const signature = await signer.signMessage(getBytes(authorization));
       joinBody = {
         matchId,
@@ -621,11 +733,11 @@ function App() {
       joinBody,
       localServicesEnabled
         ? "Local computer is joining the match…"
-        : "Sepolia computer is minting or selecting its piece and joining on-chain…"
+        : "The computer is minting or selecting its piece and joining on-chain…"
     );
     setComputerMatchIds((currentIds) => {
       const nextIds = [...new Set([...currentIds, String(matchId)])];
-      localStorage.setItem(`gobang-computer-matches-${config.gameManager}`, JSON.stringify(nextIds));
+      localStorage.setItem(`gobang-computer-matches-${networkScope}`, JSON.stringify(nextIds));
       return nextIds;
     });
     setSelectedMatch(String(matchId));
@@ -770,10 +882,15 @@ function App() {
 
   return <main>
     <header>
-      <div><p className="eyebrow">ETHEREUM SEPOLIA TESTNET</p><h1>Gobang On-Chain</h1></div>
-      <button onClick={connectWallet} disabled={pending}>{account ? `Switch account (${shortAddress(account)})` : "Connect wallet"}</button>
+      <div><p className="eyebrow">{networkName.toUpperCase()} TESTNET</p><h1>Gobang On-Chain</h1></div>
+      <div className="wallet-controls">
+        {PUBLIC_NETWORKS[config?.chainId] && <button className="secondary" onClick={() => changeNetwork(otherChainId)} disabled={pending || aiPending || switchingNetwork || computerMoveRetry.current.inFlight}>
+          {switchingNetwork ? "Switching network…" : `Switch to ${PUBLIC_NETWORKS[otherChainId].name}`}
+        </button>}
+        <button onClick={connectWallet} disabled={pending || switchingNetwork || !contractsReady}>{account ? `Switch account (${shortAddress(account)})` : "Connect wallet"}</button>
+      </div>
     </header>
-    <p className="network-note"><strong>Transactions use Ethereum Sepolia.</strong> Minting pieces and creating or joining matches require a MetaMask confirmation. Sepolia computer matches use the relay wallet as the on-chain opponent, and every computer move is a real transaction. When the relay is available, one session signature enables no-popup player moves for two hours. Do not send mainnet ETH to this game.</p>
+    <p className="network-note"><strong>Transactions use {networkName}.</strong> Minting pieces and creating or joining matches require a MetaMask confirmation. Computer matches use the relay wallet as the on-chain opponent, and every computer move is a real transaction. When the relay is available, one session signature enables no-popup player moves for two hours. Do not send mainnet ETH to this game.</p>
     <p className="notice">{notice}</p>
     {!contractsReady && <p className="warning">Contracts are not deployed for this network. Deploy contracts, then update this client configuration.</p>}
 
@@ -784,13 +901,13 @@ function App() {
         </div>
         <label>Name<input maxLength="64" value={pieceName} onChange={(event) => setPieceName(event.target.value)} placeholder="Aurora Stone" /></label>
         <p className="field-help">Metadata is generated automatically in the browser and stored as a self-contained data URI.</p>
-        <div className="actions"><button type="button" className="secondary" onClick={randomizePiece} disabled={pending}>Randomize</button><button disabled={!account || pending}>Mint piece</button></div>
+        <div className="actions"><button type="button" className="secondary" onClick={randomizePiece} disabled={pending}>Randomize</button><button disabled={!account || !contractsReady || pending}>Mint piece</button></div>
       </form></article>
       <article><h2>Open a match</h2>
         <label>Chess piece<select value={selectedPiece} onChange={(event) => setSelectedPiece(event.target.value)} disabled={piecesLoading}><option value="">{piecesLoading ? "Loading chess pieces…" : "Select a piece"}</option>{pieces.map((piece) => <option key={piece.id} value={piece.id}>#{piece.id} — {piece.name}</option>)}</select></label>
         {piecesError && <p className="warning" role="alert">{piecesError}</p>}
         <label>Turn length (minutes)<input type="number" min="1" max="10080" value={turnMinutes} onChange={(event) => setTurnMinutes(event.target.value)} /></label>
-        <div className="actions"><button className="secondary" onClick={createMatch} disabled={!account || pending}>Create multiplayer match</button>{computerEnabled && <button onClick={createComputerMatch} disabled={!account || pending}>{localServicesEnabled ? "Play local computer" : "Play Sepolia computer"}</button>}</div>
+        <div className="actions"><button className="secondary" onClick={createMatch} disabled={!account || !contractsReady || pending}>Create multiplayer match</button>{computerEnabled && <button onClick={createComputerMatch} disabled={!account || !contractsReady || pending}>{localServicesEnabled ? "Play local computer" : "Play on-chain computer"}</button>}</div>
       </article>
     </section>
 
@@ -799,8 +916,8 @@ function App() {
       <p className="field-help">Top three wallet addresses ranked by wins across finished matches on the connected network.</p>
       {leaderboard.length === 0 ? <p className="leaderboard-empty">{matchesLoading ? "Loading leaderboard…" : matchesError ? "The leaderboard is unavailable until match history can be loaded." : "No winners yet. Finish a match to enter the leaderboard."}</p> : <ol className="leaderboard-list">{leaderboard.map((entry, index) => <li className="leaderboard-entry" key={entry.address}>
         <span className="leaderboard-rank">#{index + 1}</span>
-        {Number(config?.chainId) === 11155111
-          ? <a className="leaderboard-address" href={`https://sepolia.etherscan.io/address/${entry.address}`} target="_blank" rel="noreferrer">{entry.address}</a>
+        {explorerUrl
+          ? <a className="leaderboard-address" href={`${explorerUrl}/address/${entry.address}`} target="_blank" rel="noreferrer">{entry.address}</a>
           : <code className="leaderboard-address">{entry.address}</code>}
         <strong className="leaderboard-wins">{entry.wins} {entry.wins === 1 ? "win" : "wins"}</strong>
       </li>)}</ol>}

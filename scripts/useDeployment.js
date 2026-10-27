@@ -15,4 +15,7 @@ if (!fs.existsSync(sourcePath)) {
 }
 
 fs.copyFileSync(sourcePath, targetPath);
+const networkPath = path.join(__dirname, "..", "web", "public", "deployments", `${networkName}.json`);
+fs.mkdirSync(path.dirname(networkPath), { recursive: true });
+fs.copyFileSync(sourcePath, networkPath);
 console.log(`Web client now uses ${networkName}.`);

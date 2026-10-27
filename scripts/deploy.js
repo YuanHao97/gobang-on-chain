@@ -24,8 +24,15 @@ async function main() {
   if (hre.network.name === "sepolia" && (!process.env.SEPOLIA_RPC_URL || !process.env.SEPOLIA_PRIVATE_KEY)) {
     throw new Error("Set SEPOLIA_RPC_URL and SEPOLIA_PRIVATE_KEY before deploying to Sepolia.");
   }
+  if (hre.network.name === "baseSepolia" && !process.env.BASE_SEPOLIA_PRIVATE_KEY && !process.env.SEPOLIA_PRIVATE_KEY) {
+    throw new Error("Set BASE_SEPOLIA_PRIVATE_KEY or SEPOLIA_PRIVATE_KEY before deploying to Base Sepolia.");
+  }
   const [deployer] = await ethers.getSigners();
   const network = await ethers.provider.getNetwork();
+  if (hre.network.name === "baseSepolia" && Number(network.chainId) !== 84532) {
+    throw new Error("The Base Sepolia RPC must use chain ID 84532.");
+  }
+  console.log(`Deploying on chain ${network.chainId} with ${deployer.address}`);
   const isLocalNetwork = Number(network.chainId) === 31337;
   const feeOverrides = await deploymentFeeOverrides(ethers, ethers.provider, network.chainId);
 
@@ -64,7 +71,10 @@ async function main() {
     deployment.localPlayer = LOCAL_PLAYER_ADDRESS;
   }
 
-  const outputPaths = [path.join(__dirname, "..", "deployments", `${network.name}.json`)];
+  const outputPaths = [path.join(__dirname, "..", "deployments", `${hre.network.name}.json`)];
+  if (!isLocalNetwork) {
+    outputPaths.push(path.join(__dirname, "..", "web", "public", "deployments", `${hre.network.name}.json`));
+  }
   if (isLocalNetwork || process.env.WRITE_WEB_CONTRACTS === "true") {
     outputPaths.push(path.join(__dirname, "..", "web", "public", "contracts.json"));
   }
