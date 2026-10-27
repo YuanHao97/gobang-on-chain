@@ -43,6 +43,8 @@ Chess pieces are cosmetic identities. They do not change the rules or provide ga
 
 The contracts are the authoritative game engine. The client reads board cells and match data from the selected network instead of maintaining a separate off-chain result database.
 
+The lobby reads `nextMatchId` and `getMatch` directly, and chess-piece inventory uses current ERC-721 balances and ownership. Neither list depends on archived event logs. Match history and inventory load independently, with separate loading and error messages; a slow or failed inventory request does not hide existing matches. These reads happen on connection, after transactions, or when the player selects Refresh, without periodic match polling.
+
 ## Game Modes
 
 ### Sepolia Multiplayer and Computer Match

@@ -1,9 +1,11 @@
 export const chessPieceAbi = [
   "function mint(string displayName, string metadataURI) returns (uint256)",
   "function ownerOf(uint256 tokenId) view returns (address)",
+  "function balanceOf(address owner) view returns (uint256)",
   "function tokenURI(uint256 tokenId) view returns (string)",
   "function displayNameOf(uint256 pieceId) view returns (string)",
-  "event ChessPieceCreated(uint256 indexed pieceId, address indexed owner, string displayName, string metadataURI)"
+  "event ChessPieceCreated(uint256 indexed pieceId, address indexed owner, string displayName, string metadataURI)",
+  "error ERC721NonexistentToken(uint256 tokenId)"
 ];
 
 export const gameManagerAbi = [

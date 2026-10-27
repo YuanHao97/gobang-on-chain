@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserProvider, Contract, getBytes, id, solidityPackedKeccak256, Wallet } from "ethers";
 import { chessPieceAbi, gameManagerAbi } from "./contracts";
-import { queryFilterInChunks } from "./eventLogs";
+import { loadMatchHistory, loadOwnedPieces } from "./gameData";
 import { buildVictoryLeaderboard } from "./leaderboard";
 import { BLACK_FALLBACK_SKIN, PALETTES, skinFromMetadataURI, WHITE_FALLBACK_SKIN } from "./pieceSkin";
 import "./styles.css";
@@ -97,6 +97,11 @@ function App() {
   const [account, setAccount] = useState("");
   const [pieces, setPieces] = useState([]);
   const [matches, setMatches] = useState([]);
+  const [matchesLoading, setMatchesLoading] = useState(false);
+  const [matchesError, setMatchesError] = useState("");
+  const [piecesLoading, setPiecesLoading] = useState(false);
+  const [piecesError, setPiecesError] = useState("");
+  const refreshVersion = useRef(0);
   const [selectedPiece, setSelectedPiece] = useState("");
   const [selectedMatch, setSelectedMatch] = useState("");
   const [board, setBoard] = useState([]);
@@ -222,7 +227,10 @@ function App() {
   }, []);
 
   useEffect(() => {
+    setPieces([]);
+    setSelectedPiece("");
     if (provider && account && game && pieceContract) refresh();
+    return () => { refreshVersion.current += 1; };
   }, [provider, account, game, pieceContract]);
 
   useEffect(() => {
@@ -376,43 +384,39 @@ function App() {
 
   async function refresh() {
     if (!game || !pieceContract || !account) return;
-    try {
-      const fromBlock = config.deploymentBlock || 0;
-      const [pieceEvents, matchEvents] = await Promise.all([
-        queryFilterInChunks(pieceContract, pieceContract.filters.ChessPieceCreated(null, account), fromBlock),
-        queryFilterInChunks(game, game.filters.MatchCreated(), fromBlock)
-      ]);
-      const loadedPieces = await Promise.all(pieceEvents.map(async (event) => {
-        const pieceId = event.args.pieceId;
-        const owner = await pieceContract.ownerOf(pieceId);
-        return { id: pieceId.toString(), name: event.args.displayName, owner };
-      }));
-      const ownedPieces = loadedPieces.filter((piece) => piece.owner.toLowerCase() === account.toLowerCase());
-      setPieces(ownedPieces);
-      if (!selectedPiece && ownedPieces[0]) setSelectedPiece(ownedPieces[0].id);
+    const version = ++refreshVersion.current;
+    const isCurrent = () => refreshVersion.current === version;
+    setMatchesLoading(true);
+    setPiecesLoading(true);
+    setMatchesError("");
+    setPiecesError("");
 
-      const loadedMatches = await Promise.all(matchEvents.map(async (event) => {
-        const id = event.args.matchId.toString();
-        const data = await game.getMatch(event.args.matchId);
-        return {
-          id,
-          creator: data.creator,
-          joiner: data.joiner,
-          creatorPieceId: data.creatorPieceId.toString(),
-          joinerPieceId: data.joinerPieceId.toString(),
-          boardSize: Number(data.boardSize),
-          moveCount: Number(data.moveCount),
-          currentPlayer: data.currentPlayer,
-          deadline: Number(data.turnDeadline),
-          status: Number(data.status),
-          reason: Number(data.finishReason),
-          winner: data.winner
-        };
-      }));
-      setMatches(loadedMatches.reverse());
-    } catch (error) {
-      setNotice(`Refresh failed: ${displayError(error)}`);
-    }
+    await Promise.allSettled([
+      loadMatchHistory(game)
+        .then((loadedMatches) => {
+          if (isCurrent()) setMatches(loadedMatches);
+        })
+        .catch((error) => {
+          if (isCurrent()) setMatchesError(`Match history could not be loaded: ${displayError(error)}`);
+        })
+        .finally(() => {
+          if (isCurrent()) setMatchesLoading(false);
+        }),
+      loadOwnedPieces(pieceContract, account)
+        .then((ownedPieces) => {
+          if (!isCurrent()) return;
+          setPieces(ownedPieces);
+          setSelectedPiece((currentId) => ownedPieces.some((piece) => piece.id === currentId)
+            ? currentId
+            : ownedPieces[0]?.id || "");
+        })
+        .catch((error) => {
+          if (isCurrent()) setPiecesError(`Chess pieces could not be loaded: ${displayError(error)}`);
+        })
+        .finally(() => {
+          if (isCurrent()) setPiecesLoading(false);
+        })
+    ]);
   }
 
   async function loadBoard(match) {
@@ -783,7 +787,8 @@ function App() {
         <div className="actions"><button type="button" className="secondary" onClick={randomizePiece} disabled={pending}>Randomize</button><button disabled={!account || pending}>Mint piece</button></div>
       </form></article>
       <article><h2>Open a match</h2>
-        <label>Chess piece<select value={selectedPiece} onChange={(event) => setSelectedPiece(event.target.value)}><option value="">Select a piece</option>{pieces.map((piece) => <option key={piece.id} value={piece.id}>#{piece.id} — {piece.name}</option>)}</select></label>
+        <label>Chess piece<select value={selectedPiece} onChange={(event) => setSelectedPiece(event.target.value)} disabled={piecesLoading}><option value="">{piecesLoading ? "Loading chess pieces…" : "Select a piece"}</option>{pieces.map((piece) => <option key={piece.id} value={piece.id}>#{piece.id} — {piece.name}</option>)}</select></label>
+        {piecesError && <p className="warning" role="alert">{piecesError}</p>}
         <label>Turn length (minutes)<input type="number" min="1" max="10080" value={turnMinutes} onChange={(event) => setTurnMinutes(event.target.value)} /></label>
         <div className="actions"><button className="secondary" onClick={createMatch} disabled={!account || pending}>Create multiplayer match</button>{computerEnabled && <button onClick={createComputerMatch} disabled={!account || pending}>{localServicesEnabled ? "Play local computer" : "Play Sepolia computer"}</button>}</div>
       </article>
@@ -792,7 +797,7 @@ function App() {
     <section className="leaderboard">
       <div className="section-title"><div><p className="eyebrow">ON-CHAIN RECORDS</p><h2>Victory leaderboard</h2></div></div>
       <p className="field-help">Top three wallet addresses ranked by wins across finished matches on the connected network.</p>
-      {leaderboard.length === 0 ? <p className="leaderboard-empty">No winners yet. Finish a match to enter the leaderboard.</p> : <ol className="leaderboard-list">{leaderboard.map((entry, index) => <li className="leaderboard-entry" key={entry.address}>
+      {leaderboard.length === 0 ? <p className="leaderboard-empty">{matchesLoading ? "Loading leaderboard…" : matchesError ? "The leaderboard is unavailable until match history can be loaded." : "No winners yet. Finish a match to enter the leaderboard."}</p> : <ol className="leaderboard-list">{leaderboard.map((entry, index) => <li className="leaderboard-entry" key={entry.address}>
         <span className="leaderboard-rank">#{index + 1}</span>
         {Number(config?.chainId) === 11155111
           ? <a className="leaderboard-address" href={`https://sepolia.etherscan.io/address/${entry.address}`} target="_blank" rel="noreferrer">{entry.address}</a>
@@ -801,8 +806,10 @@ function App() {
       </li>)}</ol>}
     </section>
 
-    <section className="matches"><div className="section-title"><h2>Match lobby</h2><button className="secondary" onClick={refresh} disabled={!account || pending}>Refresh</button></div>
-      {matches.length === 0 ? <p>No matches yet.</p> : <div className="match-list">{matches.map((match) => <button className={`match ${selectedMatch === match.id ? "selected" : ""}`} key={match.id} onClick={() => selectMatch(match.id)}>
+    <section className="matches"><div className="section-title"><h2>Match lobby</h2><button className="secondary" onClick={refresh} disabled={!account || pending || matchesLoading || piecesLoading}>{matchesLoading || piecesLoading ? "Refreshing…" : "Refresh"}</button></div>
+      {matchesLoading && <p role="status">Loading match history…</p>}
+      {matchesError && <p className="warning" role="alert">{matchesError}</p>}
+      {matches.length === 0 ? (!account ? <p>Connect a wallet to load match history.</p> : !matchesLoading && !matchesError && <p>No matches yet.</p>) : <div className="match-list">{matches.map((match) => <button className={`match ${selectedMatch === match.id ? "selected" : ""}`} key={match.id} onClick={() => selectMatch(match.id)}>
         <strong>Match #{match.id}</strong><span>{statusLabel(match)} · {match.moveCount} moves</span><span>Black: {shortAddress(match.creator)}</span>
         {!localServicesEnabled && robotAddress && match.joiner.toLowerCase() === robotAddress.toLowerCase() && <span>Computer opponent · fully on-chain</span>}
         {match.status === 0 && match.creator.toLowerCase() !== account.toLowerCase() && <span className="join">Available to join</span>}
