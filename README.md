@@ -15,7 +15,7 @@ The live demo uses Ethereum Sepolia test ETH only. Do not send mainnet ETH to th
 - Create a multiplayer match or join an open match with an owned chess piece.
 - Play standard freestyle Gobang on a 15x15 board.
 - See each player's NFT skin rendered on every move.
-- Watch an active opponent's moves appear through automatic three-second refreshes.
+- Refresh the lobby and board on demand to see an opponent's latest move. Your own transactions and computer moves trigger a refresh after confirmation; the client does not poll match data on a timer.
 - View the top three winning wallet addresses in an on-chain victory leaderboard.
 - Ask a Coinbase AgentKit-powered advisor to recommend a legal move without playing it automatically.
 - Resign a match or settle an expired turn on-chain.
@@ -38,7 +38,7 @@ Chess pieces are cosmetic identities. They do not change the rules or provide ga
 | --- | --- |
 | `ChessPieceNFT` | ERC-721 ownership, immutable display names, and metadata URIs for player-created piece designs. |
 | `GameManager` | Match creation and joining, board state, turn order, deadlines, move validation, five-in-a-row detection, resignation, cancellation, and expiry. |
-| Web client | Wallet connection, in-browser metadata generation, piece rendering, lobby navigation, live board refresh, and completed-match snapshots. |
+| Web client | Wallet connection, in-browser metadata generation, piece rendering, lobby navigation, on-demand board refresh, and completed-match snapshots. |
 | AgentKit service | Read-only move analysis through a custom AgentKit action, a DeepSeek model, and server-side validation of every recommendation. |
 
 The contracts are the authoritative game engine. The client reads board cells and match data from the selected network instead of maintaining a separate off-chain result database.
