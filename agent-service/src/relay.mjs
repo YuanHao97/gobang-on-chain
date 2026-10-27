@@ -11,6 +11,7 @@ import {
   verifyMessage
 } from "ethers";
 import { rankCandidateMoves } from "./game.mjs";
+import { readBoard } from "./board.mjs";
 import { relayNetworkConfig } from "./relayConfig.mjs";
 
 const GAME_ABI = [
@@ -287,11 +288,7 @@ export function createSepoliaRelayer({
       }
 
       const boardSize = Number(match.boardSize);
-      const board = await Promise.all(Array.from({ length: boardSize * boardSize }, async (_, index) => {
-        const x = index % boardSize;
-        const y = Math.floor(index / boardSize);
-        return Number(await game.getCell(input.matchId, x, y));
-      }));
+      const board = await readBoard(game, input.matchId, boardSize, chainId);
       const [selectedMove] = rankCandidateMoves({ board, boardSize, playerStone: 2 }, 1);
       await game.playMove.staticCall(input.matchId, selectedMove.x, selectedMove.y);
       const transaction = await game.playMove(input.matchId, selectedMove.x, selectedMove.y);

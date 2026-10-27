@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserProvider, Contract, getBytes, id, solidityPackedKeccak256, Wallet } from "ethers";
 import { chessPieceAbi, gameManagerAbi } from "./contracts";
 import { loadMatchHistory, loadOwnedPieces } from "./gameData";
+import { readBoard } from "./board";
 import { loadNetworkDeployment, PUBLIC_NETWORKS, switchWalletNetwork } from "./networks";
 import { buildVictoryLeaderboard } from "./leaderboard";
 import { BLACK_FALLBACK_SKIN, PALETTES, skinFromMetadataURI, WHITE_FALLBACK_SKIN } from "./pieceSkin";
@@ -533,11 +534,7 @@ function App() {
   async function loadBoard(match) {
     const version = ++boardVersion.current;
     try {
-      const cells = await Promise.all(Array.from({ length: match.boardSize * match.boardSize }, async (_, index) => {
-        const x = index % match.boardSize;
-        const y = Math.floor(index / match.boardSize);
-        return Number(await game.getCell(match.id, x, y));
-      }));
+      const cells = await readBoard(game, match.id, match.boardSize, config.chainId);
       if (boardVersion.current === version) setBoard(cells);
     } catch (error) {
       if (boardVersion.current === version) setNotice(`Board load failed: ${displayError(error)}`);

@@ -47,6 +47,10 @@ The contracts are the authoritative game engine. The client reads board cells an
 
 The lobby reads `nextMatchId` and `getMatch` directly, and chess-piece inventory uses current ERC-721 balances and ownership. Neither list depends on archived event logs. Match history and inventory load independently, with separate loading and error messages; a slow or failed inventory request does not hide existing matches. These reads happen on connection, after transactions, or when the player selects Refresh, without periodic match polling.
 
+On both public testnets, the client and computer relay read all 225 cells through a single
+read-only Multicall3 request. This avoids the Base public RPC's per-second request limit;
+local Hardhat games retain direct cell reads.
+
 ## Game Modes
 
 ### Base Sepolia and Ethereum Sepolia Multiplayer and Computer Match
