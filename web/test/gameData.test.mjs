@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { loadMatchHistory, loadOwnedPieces } from "../src/gameData.js";
+import { loadConfirmedMatch, loadMatchHistory, loadOwnedPieces, mergeMatchHistory } from "../src/gameData.js";
 
 const PLAYER = "0x1111111111111111111111111111111111111111";
 const OPPONENT = "0x2222222222222222222222222222222222222222";
@@ -50,6 +50,42 @@ test("returns an empty match history only when no match has been created", async
     getMatch: async () => { throw new Error("No matches should be read."); }
   };
   assert.deepEqual(await loadMatchHistory(game), []);
+});
+
+test("a confirmed computer move updates the player's turn even when a subsequent RPC refresh is stale", async () => {
+  const stale = { ...matchData(1n), status: 1n, moveCount: 1n, currentPlayer: OPPONENT };
+  const updated = { ...stale, moveCount: 2n, currentPlayer: PLAYER };
+  const game = {
+    nextMatchId: async () => 2n,
+    getMatch: async (id, overrides) => {
+      assert.equal(String(id), "1");
+      return overrides.blockTag === 123 ? updated : stale;
+    }
+  };
+  const provider = { getTransactionReceipt: async (hash) => {
+    assert.equal(hash, "computer-move-hash");
+    return { status: 1, blockNumber: 123 };
+  } };
+  const confirmed = await loadConfirmedMatch(game, provider, "1", "computer-move-hash");
+  const merged = mergeMatchHistory([confirmed], await loadMatchHistory(game));
+  assert.equal(merged[0].currentPlayer, PLAYER);
+  assert.equal(merged[0].moveCount, 2);
+  assert.equal(merged[0].confirmedBlock, 123);
+});
+
+test("a winning computer move remains finished after an older active state is returned", async () => {
+  const confirmed = await loadConfirmedMatch({ getMatch: async () => ({
+    ...matchData(10n), status: 2n, moveCount: 10n, winner: OPPONENT, finishReason: 1n
+  }) }, { getTransactionReceipt: async () => ({ status: 1, blockNumber: 123 }) }, "1", "winning-move");
+  const [match] = mergeMatchHistory([confirmed], [{ ...confirmed, status: 1, winner: "" }]);
+  assert.equal(match.status, 2);
+  assert.equal(match.winner, OPPONENT);
+});
+
+test("later moves replace the confirmed snapshot instead of keeping its old board block", () => {
+  const previous = { id: "1", moveCount: 2, status: 1, currentPlayer: PLAYER, confirmedBlock: 123 };
+  const next = { id: "1", moveCount: 3, status: 1, currentPlayer: OPPONENT };
+  assert.deepEqual(mergeMatchHistory([previous], [next]), [next]);
 });
 
 test("recovers owned and transferred chess pieces without mint-event logs", async () => {

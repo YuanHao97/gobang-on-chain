@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserProvider, Contract, getBytes, id, solidityPackedKeccak256, Wallet } from "ethers";
 import { chessPieceAbi, gameManagerAbi } from "./contracts";
-import { loadMatchHistory, loadOwnedPieces } from "./gameData";
+import { loadConfirmedMatch, loadMatchHistory, loadOwnedPieces, mergeMatchHistory } from "./gameData";
 import { readBoard } from "./board";
 import { loadNetworkDeployment, PUBLIC_NETWORKS, switchWalletNetwork } from "./networks";
 import { buildVictoryLeaderboard } from "./leaderboard";
@@ -301,8 +301,9 @@ function App() {
         );
         if (computerMoveRetry.current.key !== turnKey) return;
         if (!result?.skipped) {
-          showComputerMove(result, activeMatch);
-          setNotice("Computer move confirmed. Your turn.");
+          const confirmedMatch = await showComputerMove(result, activeMatch, () => computerMoveRetry.current.key === turnKey);
+          if (!confirmedMatch) return;
+          setNotice(confirmedMatch.status === 2 ? "Computer move confirmed. Match finished." : "Computer move confirmed. Your turn.");
         }
         attempt.failures = 0;
         await refresh();
@@ -506,7 +507,7 @@ function App() {
     await Promise.allSettled([
       loadMatchHistory(game)
         .then((loadedMatches) => {
-          if (isCurrent()) setMatches(loadedMatches);
+          if (isCurrent()) setMatches((current) => mergeMatchHistory(current, loadedMatches));
         })
         .catch((error) => {
           if (isCurrent()) setMatchesError(`Match history could not be loaded: ${displayError(error)}`);
@@ -534,7 +535,8 @@ function App() {
   async function loadBoard(match) {
     const version = ++boardVersion.current;
     try {
-      const cells = await readBoard(game, match.id, match.boardSize, config.chainId);
+      const cells = await readBoard(game, match.id, match.boardSize, config.chainId,
+        match.confirmedBlock ? { blockTag: match.confirmedBlock } : {});
       if (boardVersion.current === version) setBoard(cells);
     } catch (error) {
       if (boardVersion.current === version) setNotice(`Board load failed: ${displayError(error)}`);
@@ -783,17 +785,21 @@ function App() {
     return send((signer) => game.connect(signer).joinMatch(matchId, selectedPiece), "Match joined. Black moves first.");
   }
 
-  function showComputerMove(result, match = activeMatch) {
+  async function showComputerMove(result, match = activeMatch, isCurrent = () => true) {
     if (result?.skipped || !match) return;
+    const confirmedMatch = await loadConfirmedMatch(game, provider, match.id, result.transactionHash);
+    if (!isCurrent()) return;
+    setMatches((current) => mergeMatchHistory(current, [confirmedMatch]));
     const index = Number(result?.index);
     const cellCount = match.boardSize * match.boardSize;
-    if (!Number.isInteger(index) || index < 0 || index >= cellCount) return;
+    if (!Number.isInteger(index) || index < 0 || index >= cellCount) return confirmedMatch;
     setBoard((currentBoard) => {
       if (currentBoard.length !== cellCount) return currentBoard;
       const nextBoard = [...currentBoard];
       nextBoard[index] = 2;
       return nextBoard;
     });
+    return confirmedMatch;
   }
 
   function playMove(index) {
