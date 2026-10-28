@@ -14,7 +14,7 @@ export async function loadMatch(game, id, overrides = {}) {
 export async function loadConfirmedMatch(game, provider, id, transactionHash) {
   const receipt = await provider.getTransactionReceipt(transactionHash)
     || await provider.waitForTransaction(transactionHash, 1, 30_000);
-  if (!receipt || Number(receipt.status) !== 1) throw new Error("The computer transaction could not be confirmed.");
+  if (!receipt || Number(receipt.status) !== 1) throw new Error("The transaction could not be confirmed.");
   const match = await loadMatch(game, id, { blockTag: receipt.blockNumber });
   return { ...match, confirmedBlock: receipt.blockNumber };
 }

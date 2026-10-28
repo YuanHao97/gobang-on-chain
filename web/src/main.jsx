@@ -107,9 +107,13 @@ function App() {
   const [piecesError, setPiecesError] = useState("");
   const refreshVersion = useRef(0);
   const boardVersion = useRef(0);
+  const playerMoveInFlight = useRef(false);
+  const pendingPlayerMove = useRef(null);
+  const [moveSyncing, setMoveSyncing] = useState(false);
   const [selectedPiece, setSelectedPiece] = useState("");
   const [selectedMatch, setSelectedMatch] = useState("");
   const [board, setBoard] = useState([]);
+  const [boardError, setBoardError] = useState("");
   const [pieceName, setPieceName] = useState("");
   const [pieceDesign, setPieceDesign] = useState(() => createRandomPiece());
   const [computerMatchIds, setComputerMatchIds] = useState([]);
@@ -131,6 +135,8 @@ function App() {
     || (Number(config?.chainId) === 31337 ? "Hardhat Local" : "the configured network");
   const explorerUrl = PUBLIC_NETWORKS[config?.chainId]?.explorerUrl || "";
   const networkScope = `${config?.chainId}-${config?.gameManager}`;
+  const currentView = useRef(null);
+  currentView.current = { scope: networkScope, matchId: selectedMatch };
   const otherChainId = Number(config?.chainId) === 84532 ? 11155111 : 84532;
   const game = useMemo(
     () => provider && contractsReady ? new Contract(config.gameManager, gameManagerAbi, provider) : null,
@@ -259,6 +265,7 @@ function App() {
   useEffect(() => {
     if (activeMatch && game) loadBoard(activeMatch);
     else setBoard([]);
+    return () => { boardVersion.current += 1; };
   }, [activeMatch?.id, activeMatch?.moveCount, activeMatch?.status, game]);
 
   useEffect(() => {
@@ -301,7 +308,7 @@ function App() {
         );
         if (computerMoveRetry.current.key !== turnKey) return;
         if (!result?.skipped) {
-          const confirmedMatch = await showComputerMove(result, activeMatch, () => computerMoveRetry.current.key === turnKey);
+          const confirmedMatch = await applyConfirmedMove(result, activeMatch, () => computerMoveRetry.current.key === turnKey);
           if (!confirmedMatch) return;
           setNotice(confirmedMatch.status === 2 ? "Computer move confirmed. Match finished." : "Computer move confirmed. Your turn.");
         }
@@ -380,6 +387,10 @@ function App() {
   function clearNetworkState() {
     refreshVersion.current += 1;
     boardVersion.current += 1;
+    pendingPlayerMove.current = null;
+    playerMoveInFlight.current = false;
+    setMoveSyncing(false);
+    setBoardError("");
     if (computerMoveRetry.current.timer) window.clearTimeout(computerMoveRetry.current.timer);
     computerMoveRetry.current = { key: "", inFlight: false, failures: 0, timer: null };
     setPieces([]);
@@ -504,6 +515,11 @@ function App() {
     setMatchesError("");
     setPiecesError("");
 
+    if (pendingPlayerMove.current?.scope === networkScope) {
+      try { await synchronizePlayerMove(pendingPlayerMove.current); }
+      catch (error) { if (isCurrent()) setNotice(displayError(error)); }
+    }
+
     await Promise.allSettled([
       loadMatchHistory(game)
         .then((loadedMatches) => {
@@ -534,16 +550,21 @@ function App() {
 
   async function loadBoard(match) {
     const version = ++boardVersion.current;
+    setBoardError("");
     try {
       const cells = await readBoard(game, match.id, match.boardSize, config.chainId,
         match.confirmedBlock ? { blockTag: match.confirmedBlock } : {});
       if (boardVersion.current === version) setBoard(cells);
     } catch (error) {
-      if (boardVersion.current === version) setNotice(`Board load failed: ${displayError(error)}`);
+      if (boardVersion.current === version) {
+        const message = `Board load failed: ${displayError(error)}`;
+        setBoardError(message);
+        setNotice(message);
+      }
     }
   }
 
-  async function send(action, successMessage) {
+  async function send(action, successMessage, onConfirmed) {
     try {
       setPending(true);
       const signer = await provider.getSigner();
@@ -551,7 +572,8 @@ function App() {
       setNotice("Transaction submitted. Waiting for confirmation…");
       const receipt = await transaction.wait(1, 30000);
       if (!receipt) throw new Error("Transaction confirmation timed out. Check the wallet activity and refresh the page.");
-      setNotice(successMessage);
+      const confirmed = onConfirmed ? await onConfirmed(receipt) : null;
+      setNotice(confirmed?.status === 2 ? "Move confirmed. Match finished." : successMessage);
       await refresh();
     } catch (error) {
       setNotice(displayError(error));
@@ -683,15 +705,18 @@ function App() {
         [config.gameManager, BigInt(config.chainId), BigInt(activeMatch.id), x, y, account, BigInt(signatureDeadline)]
       );
       const signature = await sessionWallet.signMessage(getBytes(authorization));
-      await callRelayService("move", {
+      const result = await callRelayService("move", {
         matchId: activeMatch.id,
         x,
         y,
         player: account,
         signatureDeadline: String(signatureDeadline),
         signature
-      }, "Submitting your fast move…");
-      setNotice(isComputerMatch
+      }, "Submitting your fast move…", { refreshAfter: false });
+      const confirmed = await synchronizePlayerMove({
+        scope: networkScope, match: activeMatch, index, transactionHash: result.transactionHash
+      });
+      setNotice(confirmed?.status === 2 ? "Move confirmed. Match finished." : isComputerMatch
         ? "Move confirmed. The computer will move automatically."
         : "Move confirmed. Use Refresh to check for your opponent's next move.");
     } catch (error) {
@@ -785,32 +810,57 @@ function App() {
     return send((signer) => game.connect(signer).joinMatch(matchId, selectedPiece), "Match joined. Black moves first.");
   }
 
-  async function showComputerMove(result, match = activeMatch, isCurrent = () => true) {
+  async function applyConfirmedMove(result, match = activeMatch, isCurrent = () => true, stone = 2) {
     if (result?.skipped || !match) return;
     const confirmedMatch = await loadConfirmedMatch(game, provider, match.id, result.transactionHash);
     if (!isCurrent()) return;
     setMatches((current) => mergeMatchHistory(current, [confirmedMatch]));
+    if (currentView.current.matchId !== match.id) return confirmedMatch;
+    boardVersion.current += 1;
     const index = Number(result?.index);
     const cellCount = match.boardSize * match.boardSize;
     if (!Number.isInteger(index) || index < 0 || index >= cellCount) return confirmedMatch;
     setBoard((currentBoard) => {
       if (currentBoard.length !== cellCount) return currentBoard;
       const nextBoard = [...currentBoard];
-      nextBoard[index] = 2;
+      nextBoard[index] = stone;
       return nextBoard;
     });
     return confirmedMatch;
   }
 
-  function playMove(index) {
-    if (!activeMatch || board[index] !== 0) return;
+  async function synchronizePlayerMove(attempt) {
+    pendingPlayerMove.current = attempt;
+    setMoveSyncing(true);
+    try {
+      const stone = attempt.match.creator.toLowerCase() === account.toLowerCase() ? 1 : 2;
+      const confirmed = await applyConfirmedMove(attempt, attempt.match,
+        () => currentView.current.scope === attempt.scope, stone);
+      if (pendingPlayerMove.current === attempt) {
+        pendingPlayerMove.current = null;
+        setMoveSyncing(false);
+      }
+      return confirmed;
+    } catch {
+      throw new Error("Your move is confirmed, but the board could not be synchronized. Click Refresh to retry; do not submit the move again.");
+    }
+  }
+
+  async function playMove(index) {
+    if (!canPlay || pending || aiPending || isTurnExpired || playerMoveInFlight.current || !activeMatch || board[index] !== 0) return;
+    playerMoveInFlight.current = true;
     const x = index % activeMatch.boardSize;
     const y = Math.floor(index / activeMatch.boardSize);
-    if (hasFastSession) return playFastMove(index, x, y);
-    return send(
-      (signer) => game.connect(signer).playMove(activeMatch.id, x, y),
-      isComputerMatch ? "Move confirmed. The computer will move automatically." : "Move confirmed."
-    );
+    try {
+      if (hasFastSession) return await playFastMove(index, x, y);
+      return await send(
+        (signer) => game.connect(signer).playMove(activeMatch.id, x, y),
+        isComputerMatch ? "Move confirmed. The computer will move automatically." : "Move confirmed.",
+        (receipt) => synchronizePlayerMove({ scope: networkScope, match: activeMatch, index, transactionHash: receipt.hash })
+      );
+    } finally {
+      playerMoveInFlight.current = false;
+    }
   }
 
   function resign() {
@@ -865,12 +915,20 @@ function App() {
   }
 
   function selectMatch(matchId) {
+    if (matchId === selectedMatch) {
+      if (activeMatch && game) void loadBoard(activeMatch);
+      void refresh();
+      return;
+    }
+    boardVersion.current += 1;
     setBoard([]);
+    setBoardError("");
     setSelectedMatch(matchId);
   }
 
   function renderMatchBoard(readOnly = false) {
     if (!activeMatch || board.length !== activeMatch.boardSize * activeMatch.boardSize) {
+      if (boardError && activeMatch) return <div role="alert"><p className="warning">{boardError}</p><button className="secondary" onClick={() => loadBoard(activeMatch)}>Retry loading board</button></div>;
       return <p className="field-help">Loading the on-chain board…</p>;
     }
     const suggestedIndex = aiRecommendation
@@ -880,7 +938,7 @@ function App() {
   }
 
   const statusLabel = (match) => ["Open", "Active", "Finished"][match.status] || "Unknown";
-  const canPlay = activeMatch?.status === 1 && activeMatch.currentPlayer.toLowerCase() === account.toLowerCase();
+  const canPlay = !moveSyncing && activeMatch?.status === 1 && activeMatch.currentPlayer.toLowerCase() === account.toLowerCase();
   const skinForStone = (stone) => (stone === 1 ? matchSkins.creator : matchSkins.joiner);
 
   return <main>

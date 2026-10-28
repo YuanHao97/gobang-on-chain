@@ -82,6 +82,25 @@ test("a winning computer move remains finished after an older active state is re
   assert.equal(match.winner, OPPONENT);
 });
 
+test("a confirmed player move advances to the computer and replaces the old pinned board block", async () => {
+  const before = {
+    id: "3", creator: PLAYER, joiner: OPPONENT, status: 1, moveCount: 2,
+    currentPlayer: PLAYER, confirmedBlock: 123
+  };
+  const game = { getMatch: async (id, overrides) => {
+    assert.equal(id, "3");
+    assert.equal(overrides.blockTag, 456);
+    return { ...matchData(3n), status: 1n, currentPlayer: OPPONENT };
+  } };
+  const provider = { getTransactionReceipt: async () => ({ status: 1, blockNumber: 456 }) };
+  const confirmed = await loadConfirmedMatch(game, provider, "3", "player-move-hash");
+  let matches = mergeMatchHistory([before], [confirmed]);
+  matches = mergeMatchHistory(matches, [before]);
+  assert.equal(matches[0].moveCount, 3);
+  assert.equal(matches[0].currentPlayer, OPPONENT);
+  assert.equal(matches[0].confirmedBlock, 456);
+});
+
 test("later moves replace the confirmed snapshot instead of keeping its old board block", () => {
   const previous = { id: "1", moveCount: 2, status: 1, currentPlayer: PLAYER, confirmedBlock: 123 };
   const next = { id: "1", moveCount: 3, status: 1, currentPlayer: OPPONENT };
